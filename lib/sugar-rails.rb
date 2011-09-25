@@ -1,1 +1,1 @@
-require "sugar/rails/version"
+require "sugar/rails"
