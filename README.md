@@ -5,7 +5,7 @@
 
 ## Usage
 
-This gem vendors Sugar 1.0 for Rails 3.1 and greater. The files will be added to the asset pipeline and available for you to use.
+This gem vendors Sugar 1.1.1 for Rails 3.1 and greater. The files will be added to the asset pipeline and available for you to use.
 
 To enable, add the following line to the file `app/assets/javascripts/application.js` (or other [sprockets](https://github.com/sstephenson/sprockets) manifest):
 
