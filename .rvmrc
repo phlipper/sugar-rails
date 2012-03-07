@@ -1,1 +1,1 @@
-rvm use 1.9.2@sugar-rails --create
+rvm use 1.9.3@sugar-rails --create
