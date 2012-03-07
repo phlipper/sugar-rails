@@ -4,8 +4,8 @@ require File.expand_path('../lib/sugar/rails/version', __FILE__)
 Gem::Specification.new do |gem|
   gem.authors       = ["Phil Cohen"]
   gem.email         = ["github@phlippers.net"]
-  gem.description   = %q{Sugar, tastefully bundled for the Rails 3.1 asset pipeline. Sweet!}
-  gem.summary       = %q{Sugar, tastefully bundled for the Rails 3.1 asset pipeline. Sweet!}
+  gem.description   = %q{Sugar, tastefully bundled for the Rails 3.0 and up. Sweet!}
+  gem.summary       = %q{Sugar, tastefully bundled for the Rails 3.0 and up. Sweet!}
   gem.homepage      = "https://github.com/phlipper/sugar-rails"
 
   gem.executables   = `git ls-files -- bin/*`.split("\n").map{ |f| File.basename(f) }
@@ -15,7 +15,7 @@ Gem::Specification.new do |gem|
   gem.require_paths = ["lib"]
   gem.version       = Sugar::Rails::VERSION
 
-  gem.add_dependency "railties", ">= 3.1.0"
-  gem.add_development_dependency "bundler", "~> 1.1.rc6"
+  gem.add_dependency "railties", ">= 3.0.0"
+  gem.add_development_dependency "bundler", "~> 1.1.rc7"
   gem.add_development_dependency "rake", "~> 0.9.2.2"
 end
