@@ -1,4 +1,4 @@
-# Sugar-rails
+# sugar-rails
 
 [Sugar](http://sugarjs.com/), tastefully bundled for the Rails 3.0 and up. Sweet!
 
