@@ -16,6 +16,6 @@ Gem::Specification.new do |gem|
   gem.version       = Sugar::Rails::VERSION
 
   gem.add_dependency "railties", ">= 3.0.0"
-  gem.add_development_dependency "bundler", "~> 1.1.rc7"
+  gem.add_development_dependency "bundler", ">= 1.1.0"
   gem.add_development_dependency "rake", "~> 0.9.2.2"
 end
