@@ -7,7 +7,7 @@
 
 For Rails 3.1 and greater, the files will be added to the asset pipeline and available for you to use.
 
-To enable: 
+To enable:
 
 * Add the following line to the file `app/assets/javascripts/application.js` (or other [sprockets](https://github.com/sstephenson/sprockets) manifest):
 
@@ -15,6 +15,17 @@ To enable:
 //= require sugar
 ```
 
+* You can choose some special distribution writing following:
+
+``` javascript
+//= require sugar-core
+//= require sugar-dates
+//= require sugar-inflections
+
+//= require sugar-dates-only
+```
+
+See more details on http://sugarjs.com/customize
 
 ### Installation
 
