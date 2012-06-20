@@ -15,17 +15,20 @@ To enable:
 //= require sugar
 ```
 
-* You can choose some special distribution writing following:
+* You can also customize the components required with the following:
 
 ``` javascript
 //= require sugar-core
 //= require sugar-dates
 //= require sugar-inflections
 
+// ... or ...
+
 //= require sugar-dates-only
 ```
 
-See more details on http://sugarjs.com/customize
+More details about customized builds can be found at http://sugarjs.com/customize.
+
 
 ### Installation
 
@@ -60,6 +63,14 @@ You're done!
 3. Commit your changes (`git commit -am 'Added some feature'`)
 4. Push to the branch (`git push origin my-new-feature`)
 5. Create new Pull Request
+
+
+## Contributors
+
+Many thanks go to the following who have contributed to making this gem even better:
+
+* **[@sandrew](https://github.com/sandrew)**
+  * support for customized builds
 
 
 ## License
