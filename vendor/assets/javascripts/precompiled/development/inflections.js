@@ -1,4 +1,11 @@
-(function(context) {
+
+  /***
+   *
+   * @package Inflections
+   * @dependency string
+   * @description Pluralization similar to ActiveSupport including uncountable words and acronyms. Humanized and URL-friendly strings.
+   *
+   ***/
 
   /***
    * String module
@@ -6,23 +13,26 @@
    ***/
 
 
-  var globalContext,
-      plurals      = [],
+  var plurals      = [],
       singulars    = [],
       uncountables = [],
       humans       = [],
       acronyms     = {},
       Downcased,
-      Normalize,
       Inflector;
 
-  globalContext = typeof global !== 'undefined' ? global : context;
+  function removeFromArray(arr, find) {
+    var index = arr.indexOf(find);
+    if(index > -1) {
+      arr.splice(index, 1);
+    }
+  }
 
   function removeFromUncountablesAndAddTo(arr, rule, replacement) {
-    if(Object.isString(rule)) {
-      uncountables.remove(rule);
+    if(isString(rule)) {
+      removeFromArray(uncountables, rule);
     }
-    uncountables.remove(replacement)
+    removeFromArray(uncountables, replacement);
     arr.unshift({ rule: rule, replacement: replacement })
   }
 
@@ -31,13 +41,13 @@
   }
 
   function isUncountable(word) {
-    return uncountables.any(function(uncountable) {
-      return new RegExp('\\b' + uncountable + '$', 'i').test(word);
+    return uncountables.some(function(uncountable) {
+      return new regexp('\\b' + uncountable + '$', 'i').test(word);
     });
   }
 
   function inflect(word, pluralize) {
-    word = Object.isString(word) ? word.toString() : '';
+    word = isString(word) ? word.toString() : '';
     if(word.isBlank() || isUncountable(word)) {
       return word;
     } else {
@@ -46,7 +56,7 @@
   }
 
   function runReplacements(word, table) {
-    table.each(function(inflection) {
+    iterateOverObject(table, function(i, inflection) {
       if(word.match(inflection.rule)) {
         word = word.replace(inflection.rule, inflection.replacement);
         return false;
@@ -113,7 +123,10 @@
      */
     'acronym': function(word) {
       acronyms[word.toLowerCase()] = word;
-      Inflector.acronymRegExp = new RegExp(Object.values(acronyms).join('|'), 'g');
+      var all = object.keys(acronyms).map(function(key) {
+        return acronyms[key];
+      });
+      Inflector.acronymRegExp = regexp(all.join('|'), 'g');
     },
 
     /*
@@ -149,19 +162,19 @@
           pluralFirstLower   = pluralFirst.toLowerCase(),
           singularFirstUpper = singularFirst.toUpperCase(),
           singularFirstLower = singularFirst.toLowerCase();
-      uncountables.remove(singular)
-      uncountables.remove(plural)
+      removeFromArray(uncountables, singular);
+      removeFromArray(uncountables, plural);
       if(singularFirstUpper == pluralFirstUpper) {
-        Inflector.plural(new RegExp('({1}){2}$'.assign(singularFirst, singularRest), 'i'), '$1' + pluralRest);
-        Inflector.plural(new RegExp('({1}){2}$'.assign(pluralFirst, pluralRest), 'i'), '$1' + pluralRest);
-        Inflector.singular(new RegExp('({1}){2}$'.assign(pluralFirst, pluralRest), 'i'), '$1' + singularRest);
+        Inflector.plural(new regexp('({1}){2}$'.assign(singularFirst, singularRest), 'i'), '$1' + pluralRest);
+        Inflector.plural(new regexp('({1}){2}$'.assign(pluralFirst, pluralRest), 'i'), '$1' + pluralRest);
+        Inflector.singular(new regexp('({1}){2}$'.assign(pluralFirst, pluralRest), 'i'), '$1' + singularRest);
       } else {
-        Inflector.plural(new RegExp('{1}{2}$'.assign(singularFirstUpper, singularRest)), pluralFirstUpper + pluralRest);
-        Inflector.plural(new RegExp('{1}{2}$'.assign(singularFirstLower, singularRest)), pluralFirstLower + pluralRest);
-        Inflector.plural(new RegExp('{1}{2}$'.assign(pluralFirstUpper, pluralRest)), pluralFirstUpper + pluralRest);
-        Inflector.plural(new RegExp('{1}{2}$'.assign(pluralFirstLower, pluralRest)), pluralFirstLower + pluralRest);
-        Inflector.singular(new RegExp('{1}{2}$'.assign(pluralFirstUpper, pluralRest)), singularFirstUpper + singularRest);
-        Inflector.singular(new RegExp('{1}{2}$'.assign(pluralFirstLower, pluralRest)), singularFirstLower + singularRest);
+        Inflector.plural(new regexp('{1}{2}$'.assign(singularFirstUpper, singularRest)), pluralFirstUpper + pluralRest);
+        Inflector.plural(new regexp('{1}{2}$'.assign(singularFirstLower, singularRest)), pluralFirstLower + pluralRest);
+        Inflector.plural(new regexp('{1}{2}$'.assign(pluralFirstUpper, pluralRest)), pluralFirstUpper + pluralRest);
+        Inflector.plural(new regexp('{1}{2}$'.assign(pluralFirstLower, pluralRest)), pluralFirstLower + pluralRest);
+        Inflector.singular(new regexp('{1}{2}$'.assign(pluralFirstUpper, pluralRest)), singularFirstUpper + singularRest);
+        Inflector.singular(new regexp('{1}{2}$'.assign(pluralFirstLower, pluralRest)), singularFirstLower + singularRest);
       }
     },
 
@@ -173,8 +186,9 @@
      *   String.Inflector.uncountable('money', 'information')
      *   String.Inflector.uncountable(['money', 'information', 'rice'])
      */
-    'uncountable': function() {
-      uncountables.add(Array.create(arguments).flatten());
+    'uncountable': function(first) {
+      var add = array.isArray(first) ? first : multiArgs(arguments);
+      uncountables = uncountables.concat(add);
     },
 
     /*
@@ -215,95 +229,6 @@
     'with', 'for'
   ];
 
-  Normalize = {
-    'A':  /[AⒶＡÀÁÂẦẤẪẨÃĀĂẰẮẴẲȦǠÄǞẢÅǺǍȀȂẠẬẶḀĄȺⱯ]/g,
-    'B':  /[BⒷＢḂḄḆɃƂƁ]/g,
-    'C':  /[CⒸＣĆĈĊČÇḈƇȻꜾ]/g,
-    'D':  /[DⒹＤḊĎḌḐḒḎĐƋƊƉꝹ]/g,
-    'E':  /[EⒺＥÈÉÊỀẾỄỂẼĒḔḖĔĖËẺĚȄȆẸỆȨḜĘḘḚƐƎ]/g,
-    'F':  /[FⒻＦḞƑꝻ]/g,
-    'G':  /[GⒼＧǴĜḠĞĠǦĢǤƓꞠꝽꝾ]/g,
-    'H':  /[HⒽＨĤḢḦȞḤḨḪĦⱧⱵꞍ]/g,
-    'I':  /[IⒾＩÌÍÎĨĪĬİÏḮỈǏȈȊỊĮḬƗ]/g,
-    'J':  /[JⒿＪĴɈ]/g,
-    'K':  /[KⓀＫḰǨḲĶḴƘⱩꝀꝂꝄꞢ]/g,
-    'L':  /[LⓁＬĿĹĽḶḸĻḼḺŁȽⱢⱠꝈꝆꞀ]/g,
-    'M':  /[MⓂＭḾṀṂⱮƜ]/g,
-    'N':  /[NⓃＮǸŃÑṄŇṆŅṊṈȠƝꞐꞤ]/g,
-    'O':  /[OⓄＯÒÓÔỒỐỖỔÕṌȬṎŌṐṒŎȮȰÖȪỎŐǑȌȎƠỜỚỠỞỢỌỘǪǬØǾƆƟꝊꝌ]/g,
-    'P':  /[PⓅＰṔṖƤⱣꝐꝒꝔ]/g,
-    'Q':  /[QⓆＱꝖꝘɊ]/g,
-    'R':  /[RⓇＲŔṘŘȐȒṚṜŖṞɌⱤꝚꞦꞂ]/g,
-    'S':  /[SⓈＳẞŚṤŜṠŠṦṢṨȘŞⱾꞨꞄ]/g,
-    'T':  /[TⓉＴṪŤṬȚŢṰṮŦƬƮȾꞆ]/g,
-    'U':  /[UⓊＵÙÚÛŨṸŪṺŬÜǛǗǕǙỦŮŰǓȔȖƯỪỨỮỬỰỤṲŲṶṴɄ]/g,
-    'V':  /[VⓋＶṼṾƲꝞɅ]/g,
-    'W':  /[WⓌＷẀẂŴẆẄẈⱲ]/g,
-    'X':  /[XⓍＸẊẌ]/g,
-    'Y':  /[YⓎＹỲÝŶỸȲẎŸỶỴƳɎỾ]/g,
-    'Z':  /[ZⓏＺŹẐŻŽẒẔƵȤⱿⱫꝢ]/g,
-    'a':  /[aⓐａẚàáâầấẫẩãāăằắẵẳȧǡäǟảåǻǎȁȃạậặḁąⱥɐ]/g,
-    'b':  /[bⓑｂḃḅḇƀƃɓ]/g,
-    'c':  /[cⓒｃćĉċčçḉƈȼꜿↄ]/g,
-    'd':  /[dⓓｄḋďḍḑḓḏđƌɖɗꝺ]/g,
-    'e':  /[eⓔｅèéêềếễểẽēḕḗĕėëẻěȅȇẹệȩḝęḙḛɇɛǝ]/g,
-    'f':  /[fⓕｆḟƒꝼ]/g,
-    'g':  /[gⓖｇǵĝḡğġǧģǥɠꞡᵹꝿ]/g,
-    'h':  /[hⓗｈĥḣḧȟḥḩḫẖħⱨⱶɥ]/g,
-    'i':  /[iⓘｉìíîĩīĭïḯỉǐȉȋịįḭɨı]/g,
-    'j':  /[jⓙｊĵǰɉ]/g,
-    'k':  /[kⓚｋḱǩḳķḵƙⱪꝁꝃꝅꞣ]/g,
-    'l':  /[lⓛｌŀĺľḷḹļḽḻſłƚɫⱡꝉꞁꝇ]/g,
-    'm':  /[mⓜｍḿṁṃɱɯ]/g,
-    'n':  /[nⓝｎǹńñṅňṇņṋṉƞɲŉꞑꞥ]/g,
-    'o':  /[oⓞｏòóôồốỗổõṍȭṏōṑṓŏȯȱöȫỏőǒȍȏơờớỡởợọộǫǭøǿɔꝋꝍɵ]/g,
-    'p':  /[pⓟｐṕṗƥᵽꝑꝓꝕ]/g,
-    'q':  /[qⓠｑɋꝗꝙ]/g,
-    'r':  /[rⓡｒŕṙřȑȓṛṝŗṟɍɽꝛꞧꞃ]/g,
-    's':  /[sⓢｓśṥŝṡšṧṣṩșşȿꞩꞅẛ]/g,
-    't':  /[tⓣｔṫẗťṭțţṱṯŧƭʈⱦꞇ]/g,
-    'u':  /[uⓤｕùúûũṹūṻŭüǜǘǖǚủůűǔȕȗưừứữửựụṳųṷṵʉ]/g,
-    'v':  /[vⓥｖṽṿʋꝟʌ]/g,
-    'w':  /[wⓦｗẁẃŵẇẅẘẉⱳ]/g,
-    'x':  /[xⓧｘẋẍ]/g,
-    'y':  /[yⓨｙỳýŷỹȳẏÿỷẙỵƴɏỿ]/g,
-    'z':  /[zⓩｚźẑżžẓẕƶȥɀⱬꝣ]/g,
-    'AA': /[Ꜳ]/g,
-    'AE': /[ÆǼǢ]/g,
-    'AO': /[Ꜵ]/g,
-    'AU': /[Ꜷ]/g,
-    'AV': /[ꜸꜺ]/g,
-    'AY': /[Ꜽ]/g,
-    'DZ': /[ǱǄ]/g,
-    'Dz': /[ǲǅ]/g,
-    'LJ': /[Ǉ]/g,
-    'Lj': /[ǈ]/g,
-    'NJ': /[Ǌ]/g,
-    'Nj': /[ǋ]/g,
-    'OI': /[Ƣ]/g,
-    'OO': /[Ꝏ]/g,
-    'OU': /[Ȣ]/g,
-    'TZ': /[Ꜩ]/g,
-    'VY': /[Ꝡ]/g,
-    'aa': /[ꜳ]/g,
-    'ae': /[æǽǣ]/g,
-    'ao': /[ꜵ]/g,
-    'au': /[ꜷ]/g,
-    'av': /[ꜹꜻ]/g,
-    'ay': /[ꜽ]/g,
-    'dz': /[ǳǆ]/g,
-    'hv': /[ƕ]/g,
-    'lj': /[ǉ]/g,
-    'nj': /[ǌ]/g,
-    'oi': /[ƣ]/g,
-    'ou': /[ȣ]/g,
-    'oo': /[ꝏ]/g,
-    'ss':  /[ß]/g,
-    'tz': /[ꜩ]/g,
-    'vy': /[ꝡ]/
-  };
-
-
   Inflector.plural(/$/, 's');
   Inflector.plural(/s$/gi, 's');
   Inflector.plural(/(ax|test)is$/gi, '$1es');
@@ -328,7 +253,7 @@
   Inflector.plural(/(quiz)$/gi, '$1zes');
   Inflector.plural(/(phot|cant|hom|zer|pian|portic|pr|quart|kimon)o$/gi, '$1os');
   Inflector.plural(/(craft)$/gi, '$1');
-  Inflector.plural(/[eo]{2}(th?)$/gi, 'ee$1');
+  Inflector.plural(/([ft])[eo]{2}(th?)$/gi, '$1ee$2');
 
   Inflector.singular(/s$/gi, '');
   Inflector.singular(/([pst][aiu]s)$/gi, '$1');
@@ -372,7 +297,7 @@
   Inflector.uncountable('equipment,information,rice,money,species,series,fish,sheep,jeans'.split(','));
 
 
-  String.extend({
+  extend(string, true, false, {
 
     /***
      * @method pluralize()
@@ -447,30 +372,12 @@
         hasPunctuation = fullStopPunctuation.test(word);
         isFirstOrLast = index == 0 || index == words.length - 1 || hasPunctuation || lastHadPunctuation;
         lastHadPunctuation = hasPunctuation;
-        if(isFirstOrLast || !Downcased.any(word)) {
+        if(isFirstOrLast || Downcased.indexOf(word) === -1) {
           return capitalize(word);
         } else {
           return word;
         }
       }).join(' ');
-    },
-
-    /***
-     * @method namespace()
-     * @returns Mixed
-     * @short Tries to find the namespace or property with the name specified in the string.
-     * @extra Namespacing begins at the global level and operates on every "." in the string. If any level returns %undefined% the result will be %undefined%.
-     * @example
-     *
-     *   'Path.To.Namespace'.namespace() -> Path.To.Namespace
-     *
-     ***/
-    'namespace': function() {
-      var spaces = this.split('.'), scope = globalContext;
-      spaces.each(function(s) {
-        return !!(scope = scope[s]);
-      });
-      return scope;
     },
 
     /***
@@ -483,38 +390,20 @@
      *
      ***/
     'parameterize': function(separator) {
+      var str = this;
       if(separator === undefined) separator = '-';
-      var str = this.normalize();
+      if(str.normalize) {
+        str = str.normalize();
+      }
       str = str.replace(/[^a-z0-9\-_]+/gi, separator)
       if(separator) {
-        str = str.replace(new RegExp('^{sep}+|{sep}+$|({sep}){sep}+'.assign({ 'sep': RegExp.escape(separator) }), 'g'), '$1');
+        str = str.replace(new regexp('^{sep}+|{sep}+$|({sep}){sep}+'.assign({ 'sep': escapeRegExp(separator) }), 'g'), '$1');
       }
-      return str.toLowerCase();
-    },
-
-    /***
-     * @method normalize()
-     * @returns String
-     * @short Returns the string with accented and non-standard Latin-based characters converted into ASCII approximate equivalents.
-     * @example
-     *
-     *   'á'.normalize()                  -> 'a'
-     *   'Ménage à trois'.normalize()     -> 'Menage a trois'
-     *   'Volkswagen'.normalize()         -> 'Volkswagen'
-     *   'ＦＵＬＬＷＩＤＴＨ'.normalize() -> 'FULLWIDTH'
-     *
-     ***/
-    'normalize': function() {
-      var str = this.toString();
-      Object.each(Normalize, function(base, reg) {
-        str = str.replace(reg, base);
-      });
-      return str;
+      return encodeURI(str.toLowerCase());
     }
 
   });
 
-  String.Inflector = Inflector;
-  String.Inflector.acronyms = acronyms;
+  string.Inflector = Inflector;
+  string.Inflector.acronyms = acronyms;
 
-})(this);
