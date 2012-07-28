@@ -6,7 +6,7 @@ Gem::Specification.new do |gem|
   gem.email         = ["github@phlippers.net"]
   gem.description   = %q{Sugar, tastefully bundled for the Rails 3.0 and up. Sweet!}
   gem.summary       = %q{Sugar, tastefully bundled for the Rails 3.0 and up. Sweet!}
-  gem.homepage      = "https://github.com/phlipper/sugar-rails"
+  gem.homepage      = "http://phlippers.net/sugar-rails"
 
   gem.executables   = `git ls-files -- bin/*`.split("\n").map{ |f| File.basename(f) }
   gem.files         = `git ls-files`.split("\n")
