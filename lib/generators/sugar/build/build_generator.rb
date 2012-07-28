@@ -15,7 +15,7 @@ module Sugar
           say_status("", "")
           say_status("info", "This script creates a custom Sugar build. You can include the following packages:")
           say_status("", "")
-          get_package_content(default_packages) do |name, c|
+          get_package_content(default_packages, 'development') do |name, c|
             if name == :date_locales
               description = "Locale definitions: fr, it, es, pt, de, ru, pl, sv, ja, ko, zh-CN, zh-TW"
             else
@@ -56,9 +56,9 @@ module Sugar
 
       private
 
-      def get_package_content(packages)
+      def get_package_content(packages, type = 'minified')
         packages.each do |p|
-          file = find_in_source_paths "javascripts/precompiled/minified/#{p}.js"
+          file = find_in_source_paths "javascripts/precompiled/#{type}/#{p}.js"
           yield p, File.open(file, 'r').read
         end
       end
