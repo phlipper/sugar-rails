@@ -1,0 +1,238 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <title>sugar-rails by phlipper</title>
+
+    <link rel="stylesheet" href="stylesheets/styles.css">
+    <link rel="stylesheet" href="stylesheets/pygment_trac.css">
+    <script src="javascripts/scale.fix.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+
+    <!--[if lt IE 9]>
+    <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+  </head>
+  <body>
+    <div class="wrapper">
+      <header>
+        <h1>sugar-rails</h1>
+        <p>Sugar, tastefully bundled for the Rails 3.0 and up. Sweet!</p>
+        <p class="view"><a href="https://github.com/phlipper/sugar-rails">View the Project on GitHub <small>phlipper/sugar-rails</small></a></p>
+        <ul>
+          <li><a href="https://github.com/phlipper/sugar-rails/zipball/master">Download <strong>ZIP File</strong></a></li>
+          <li><a href="https://github.com/phlipper/sugar-rails/tarball/master">Download <strong>TAR Ball</strong></a></li>
+          <li><a href="https://github.com/phlipper/sugar-rails">View On <strong>GitHub</strong></a></li>
+        </ul>
+      </header>
+      <section>
+        <h1>sugar-rails</h1>
+
+<h2>Description</h2>
+
+<p><a href="http://sugarjs.com/">Sugar</a>, tastefully bundled for the Rails 3.0 and up. Sweet!</p>
+
+<h2>Requirements</h2>
+
+<p>This gem requires Rails 3.0+ and has been tested on the following versions:</p>
+
+<ul>
+<li>3.0</li>
+<li>3.1</li>
+<li>3.2</li>
+</ul><p>This gem has been tested against the following Ruby versions:</p>
+
+<ul>
+<li>MRI 1.8.7</li>
+<li>REE 1.8.7</li>
+<li>1.9.2</li>
+<li>1.9.3</li>
+<li>JRuby</li>
+<li>Rubinius</li>
+</ul><h2>Installation</h2>
+
+<p>Add this line to your application's Gemfile:</p>
+
+<div class="highlight"><pre><span class="n">gem</span> <span class="s2">"sugar-rails"</span>
+</pre></div>
+
+<p>And then execute:</p>
+
+<pre><code>$ bundle
+</code></pre>
+
+<p>Or install it yourself as:</p>
+
+<pre><code>$ gem install sugar-rails
+</code></pre>
+
+<h2>Usage</h2>
+
+<p><code>sugar-rails</code> supports both default and customized builds of Sugar.</p>
+
+<h3>Rails 3.1+</h3>
+
+<p>For Rails 3.1 and greater, the files will be added to the asset pipeline and available for you to use.</p>
+
+<p>To enable:</p>
+
+<ul>
+<li>Add the following line to the file <code>app/assets/javascripts/application.js</code> (or other <a href="https://github.com/sstephenson/sprockets">sprockets</a> manifest):</li>
+</ul><div class="highlight"><pre><span class="c1">//= require sugar</span>
+</pre></div>
+
+<p>The following default builds are available:</p>
+
+<ul>
+<li>
+<code>sugar</code>                (default minified package)</li>
+<li>
+<code>sugar-full</code>           (full minified package)</li>
+<li>
+<code>sugar-development</code>    (full development package)</li>
+</ul><h3>Rails 3.0</h3>
+
+<p>This gem adds an installation generator to Rails 3, <code>sugar:install</code>. Running the generator will install the JavaScript file (default minified package) necessary to use Sugar.</p>
+
+<ul>
+<li>Invoke the generator:</li>
+</ul><pre><code>$ rails generate sugar:install
+</code></pre>
+
+<ul>
+<li>Add the following to your layout or view files:</li>
+</ul><div class="highlight"><pre><span class="cp">&lt;%=</span> <span class="n">javascript_include_tag</span> <span class="s2">"sugar"</span> <span class="cp">%&gt;</span><span class="x"></span>
+</pre></div>
+
+<h2>Customized Builds</h2>
+
+<p>This gem adds a generator to provide customized builds of Sugar, <code>sugar:build</code>.</p>
+
+<p>The <code>sugar:build</code> generator requires Rails 3.1+ and <code>config.assets.enabled = true</code> since custom builds are made available through the Rails Asset Pipeline.</p>
+
+<p>Running the generator will create a customized JavaScript file with the pacakges of your choosing:</p>
+
+<pre><code>$ rails generate sugar:build package1 package2 ...
+</code></pre>
+
+<p>Once the generator has been run, you will be provided with the file <code>vendor/assets/javascripts/sugar-custom.js</code>. Add the following line to your sprockets manifest to enable your custom build:</p>
+
+<div class="highlight"><pre><span class="c1">//= require sugar-custom</span>
+</pre></div>
+
+<p>By default, the <code>sugar:build</code> generator will provide the development (un-minified) sources. If you would like to use the pre-minified sources, add the <code>--minify</code> option to the generator:</p>
+
+<pre><code>$ rails generate sugar:build package1 package2 --minify
+</code></pre>
+
+<p>The following packages are available for custom builds:</p>
+
+<ul>
+<li>
+<code>es5</code> -  Shim methods that provide ES5 compatible functionality. This package can be excluded if you do not require legacy browser support (IE8 and below).</li>
+<li>
+<code>object</code> -  Object manipulation, type checking (isNumber, isString, ...), extended objects with hash-like methods available as instance methods.</li>
+<li>
+<code>array</code> -  Array manipulation and traversal, "fuzzy matching" against elements, alphanumeric sorting and collation, enumerable methods on Object.</li>
+<li>
+<code>number</code> -  Number formatting, rounding (with precision), and ranges. Aliases to Math methods.</li>
+<li>
+<code>regexp</code> -  Escaping regexes and manipulating their flags.</li>
+<li>
+<code>function</code> -  Lazy, throttled, and memoized functions, delayed functions and handling of timers, argument currying.</li>
+<li>
+<code>date</code> -  Date parsing and formatting, relative formats like "1 minute ago", Number methods like "daysAgo", localization support with default English locale definition.</li>
+<li>
+<code>date_ranges</code> -  Date Ranges define a range of time. They can enumerate over specific points within that range, and be manipulated and compared.</li>
+<li>
+<code>date_locales</code> -  Locale definitions: fr, it, es, pt, de, ru, pl, sv, ja, ko, zh-CN, zh-TW</li>
+<li>
+<code>string</code> -  String manupulation, escaping, encoding, truncation, and:conversion.</li>
+<li>
+<code>inflections</code> -  Pluralization similar to ActiveSupport including uncountable words and acronyms. Humanized and URL-friendly strings.</li>
+<li>
+<code>language</code> -  Normalizing accented characters, character width conversion, Hiragana and Katakana conversions.</li>
+</ul><p>Some dependencies must be met for your custom build to work properly:</p>
+
+<ul>
+<li>
+<code>date</code>   &lt; <code>date_locales</code>
+</li>
+<li>
+<code>date</code>   &lt; <code>date_ranges</code>
+</li>
+<li>
+<code>string</code> &lt; <code>inflections</code>
+</li>
+<li>
+<code>string</code> &lt; <code>language</code>
+</li>
+</ul><p>Run <code>rails generate sugar:build --help</code> for full usage instructions. Please visit <a href="http://sugarjs.com/customize">http://sugarjs.com/customize</a> to learn more about customized builds.</p>
+
+<h2>Contributing</h2>
+
+<ol>
+<li><a href="https://github.com/phlipper/sugar-rails/fork_select">Fork it</a></li>
+<li>Create your feature branch (<code>git checkout -b my-new-feature</code>)</li>
+<li>Commit your changes (<code>git commit -am 'Added some feature'</code>)</li>
+<li>Push to the branch (<code>git push origin my-new-feature</code>)</li>
+<li><a>Create a Pull Request</a></li>
+</ol><h2>Contributors</h2>
+
+<p>Many thanks go to the following who have contributed to making this gem even better:</p>
+
+<ul>
+<li>
+<strong><a href="https://github.com/sandrew">@sandrew</a></strong>
+
+<ul>
+<li>add support for customized builds for 1.2.x</li>
+</ul>
+</li>
+<li>
+<strong><a href="https://github.com/andrewplummer">@andrewplummer</a></strong>
+
+<ul>
+<li>add build generator to support customized builds in 1.3+</li>
+<li>created <a href="https://github.com/andrewplummer/Sugar">Sugar</a> :)</li>
+</ul>
+</li>
+</ul><h2>License</h2>
+
+<p><strong>sugar-rails</strong></p>
+
+<ul>
+<li>Freely distributable and licensed under the <a href="http://phlipper.mit-license.org/2011-2012/license.html">MIT license</a>.</li>
+<li>Copyright (c) 2011-2012 Phil Cohen (<a href="mailto:github@phlippers.net">github@phlippers.net</a>) <a href="http://coderwall.com/phlipper"><img src="http://api.coderwall.com/phlipper/endorsecount.png" alt="endorse"></a>
+</li>
+<li><a href="http://phlippers.net/">http://phlippers.net/</a></li>
+</ul><p><strong>Sugar</strong></p>
+
+<ul>
+<li>Freely distributable and licensed under the MIT-style license.</li>
+<li>Copyright (c) 2012 Andrew Plummer</li>
+<li><a href="http://sugarjs.com/">http://sugarjs.com/</a></li>
+</ul><p>Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sub-license, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+The above copyright notice, and every other copyright notice found in this software, and all the attributions in every file, and this permission notice shall be included in all copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.</p>
+      </section>
+    </div>
+    <footer>
+      <p>Project maintained by <a href="https://github.com/phlipper">phlipper</a></p>
+      <p>Hosted on GitHub Pages &mdash; Theme by <a href="https://github.com/orderedlist">orderedlist</a></p>
+    </footer>
+    <!--[if !IE]><script>fixScale(document);</script><!--<![endif]-->
+              <script type="text/javascript">
+            var gaJsHost = (("https:" == document.location.protocol) ? "https://ssl." : "http://www.");
+            document.write(unescape("%3Cscript src='" + gaJsHost + "google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E"));
+          </script>
+          <script type="text/javascript">
+            try {
+              var pageTracker = _gat._getTracker("UA-10172882-2");
+            pageTracker._trackPageview();
+            } catch(err) {}
+          </script>
+
+  </body>
+</html>
