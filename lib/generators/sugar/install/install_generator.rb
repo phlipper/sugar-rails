@@ -5,11 +5,11 @@ if ::Rails.version < "3.1" || !::Rails.application.config.assets.enabled
   module Sugar
     module Generators
       class InstallGenerator < ::Rails::Generators::Base
-        desc "This generator installs SugarJS #{Sugar::Rails::SUGARJS_VERSION}"
+        desc "This generator installs Sugar #{Sugar::Rails::SUGARJS_VERSION}"
         source_root File.expand_path("../../../../../vendor/assets", __FILE__)
 
         def copy_javascript
-          say_status("copying", "Sugar JS", :green)
+          say_status("copying", "Sugar", :green)
           copy_file "javascripts/sugar.js", "public/javascripts/sugar.js"
         end
       end

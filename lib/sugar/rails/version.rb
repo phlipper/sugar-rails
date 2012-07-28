@@ -1,6 +1,6 @@
 module Sugar
   module Rails
-    VERSION = "1.2.5.1"
-    SUGARJS_VERSION = "1.2.5"
+    VERSION = "1.3.0"
+    SUGARJS_VERSION = "1.3"
   end
 end
