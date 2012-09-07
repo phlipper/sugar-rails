@@ -1,5 +1,5 @@
 /*
- *  Sugar Library v1.3
+ *  Sugar Library v1.3.1
  *
  *  Freely distributable and licensed under the MIT-style license.
  *  Copyright (c) 2012 Andrew Plummer
@@ -24,7 +24,7 @@
   // native objects. IE8 does not have defineProperies, however, so this check saves a try/catch block.
   var definePropertySupport = object.defineProperty && object.defineProperties;
 
-  // Class initializers and isClass type helpers
+  // Class initializers and class helpers
 
   var ClassNames = 'Array,Boolean,Date,Function,Number,String,RegExp'.split(',');
 
@@ -38,12 +38,12 @@
 
   function buildClassCheck(type) {
     return function(obj) {
-      return isClass(obj, type);
+      return className(obj) === '[object '+type+']';
     }
   }
 
-  function isClass(obj, str) {
-    return object.prototype.toString.call(obj) === '[object '+str+']';
+  function className(obj) {
+    return object.prototype.toString.call(obj);
   }
 
   function initializeClasses() {
@@ -149,7 +149,9 @@
 
   function isObject(obj) {
     // === on the constructor is not safe across iframes
-    return !!obj && isClass(obj, 'Object') && string(obj.constructor) === string(object);
+    // 'hasOwnProperty' ensures that the object also inherits
+    // from Object, which is false for DOMElements in IE.
+    return !!obj && className(obj) === '[object Object]' && 'hasOwnProperty' in obj;
   }
 
   function hasOwnProperty(obj, key) {
@@ -263,16 +265,20 @@
   // Used by Array#unique and Object.equal
 
   function stringify(thing, stack) {
-    var value, klass, isObject, isArray, arr, i, key, type = typeof thing;
+    var type = typeof thing,
+        thingIsObject,
+        thingIsArray,
+        klass, value,
+        arr, key, i;
 
     // Return quickly if string to save cycles
     if(type === 'string') return thing;
 
-    klass    = object.prototype.toString.call(thing)
-    isObject = klass === '[object Object]';
-    isArray  = klass === '[object Array]';
+    klass         = object.prototype.toString.call(thing)
+    thingIsObject = isObject(thing);
+    thingIsArray  = klass === '[object Array]';
 
-    if(thing != null && isObject || isArray) {
+    if(thing != null && thingIsObject || thingIsArray) {
       // This method for checking for cyclic structures was egregiously stolen from
       // the ingenious method by @kitcambridge from the Underscore script:
       // https://github.com/documentcloud/underscore/issues/240
@@ -291,18 +297,38 @@
       }
       stack.push(thing);
       value = string(thing.constructor);
-      arr = isArray ? thing : object.keys(thing).sort();
+      arr = thingIsArray ? thing : object.keys(thing).sort();
       for(i = 0; i < arr.length; i++) {
-        key = isArray ? i : arr[i];
+        key = thingIsArray ? i : arr[i];
         value += key + stringify(thing[key], stack);
       }
       stack.pop();
     } else if(1 / thing === -Infinity) {
       value = '-0';
     } else {
-      value = string(thing && thing.valueOf());
+      value = string(thing && thing.valueOf ? thing.valueOf() : thing);
     }
     return type + klass + value;
+  }
+
+  function isEqual(a, b) {
+    if(objectIsMatchedByValue(a) && objectIsMatchedByValue(b)) {
+      return stringify(a) === stringify(b);
+    } else {
+      return a === b;
+    }
+  }
+
+  function objectIsMatchedByValue(obj) {
+    var klass = className(obj);
+    return klass === '[object Date]'      ||
+           klass === '[object Array]'     ||
+           klass === '[object String]'    ||
+           klass === '[object Number]'    ||
+           klass === '[object RegExp]'    ||
+           klass === '[object Boolean]'   ||
+           klass === '[object Arguments]' ||
+           isObject(obj);
   }
 
 
@@ -454,7 +480,7 @@
      *
      ***/
     'isArray': function(obj) {
-      return isClass(obj, 'Array');
+      return isArray(obj);
     }
 
   });
@@ -780,7 +806,6 @@
 
 
 
-
   /***
    * @package Array
    * @dependency core
@@ -807,9 +832,9 @@
           result = false;
         }
       });
-      return object.keys(match).length > 0 && result;
+      return result;
     } else {
-      return stringify(el) === stringify(match);
+      return isEqual(el, match);
     }
   }
 
@@ -877,12 +902,10 @@
   }
 
   function arrayUnique(arr, map) {
-    var result = [], o = {}, stringified, transformed;
+    var result = [], o = {}, transformed;
     arrayEach(arr, function(el, i) {
       transformed = map ? transformArgument(el, map, arr, [el, i, arr]) : el;
-      stringified = stringify(transformed);
-      if(!arrayObjectExists(o, stringified, el)) {
-        o[stringified] = transformed;
+      if(!checkForElementInHashAndSet(o, transformed)) {
         result.push(el);
       }
     })
@@ -892,15 +915,16 @@
   function arrayIntersect(arr1, arr2, subtract) {
     var result = [], o = {};
     arr2.each(function(el) {
-      o[stringify(el)] = el;
+      checkForElementInHashAndSet(o, el);
     });
     arr1.each(function(el) {
-      var stringified = stringify(el), exists = arrayObjectExists(o, stringified, el);
+      var stringified = stringify(el),
+          isReference = !objectIsMatchedByValue(el);
       // Add the result to the array if:
       // 1. We're subtracting intersections or it doesn't already exist in the result and
       // 2. It exists in the compared array and we're adding, or it doesn't exist and we're removing.
-      if(exists != subtract) {
-        delete o[stringified];
+      if(elementExistsInHash(o, stringified, el, isReference) != subtract) {
+        discardElementFromHash(o, stringified, el, isReference);
         result.push(el);
       }
     });
@@ -929,10 +953,44 @@
     return result;
   }
 
-  function arrayObjectExists(hash, stringified, obj) {
-    return stringified in hash && (typeof obj !== 'function' || obj === hash[stringified]);
+  function elementExistsInHash(hash, key, element, isReference) {
+    var exists = key in hash;
+    if(isReference) {
+      if(!hash[key]) {
+        hash[key] = [];
+      }
+      exists = hash[key].indexOf(element) !== -1;
+    }
+    return exists;
   }
 
+  function checkForElementInHashAndSet(hash, element) {
+    var stringified = stringify(element),
+        isReference = !objectIsMatchedByValue(element),
+        exists = elementExistsInHash(hash, stringified, element, isReference);
+    if(isReference) {
+      hash[stringified].push(element);
+    } else {
+      hash[stringified] = element;
+    }
+    return exists;
+  }
+
+  function discardElementFromHash(hash, key, element, isReference) {
+    var arr, i = 0;
+    if(isReference) {
+      arr = hash[key];
+      while(i < arr.length) {
+        if(arr[i] === element) {
+          arr.splice(i, 1);
+        } else {
+          i += 1;
+        }
+      }
+    } else {
+      delete hash[key];
+    }
+  }
 
   // Support methods
 
@@ -1121,8 +1179,11 @@
     'create': function() {
       var result = []
       multiArgs(arguments, function(a) {
-        if(a && a.callee) a = multiArgs(a);
-        result = result.concat(a);
+        if(isObjectPrimitive(a)) {
+          result = result.concat(array.prototype.slice.call(a));
+        } else {
+          result.push(a);
+        }
       });
       return result;
     }
@@ -2018,19 +2079,19 @@
     {
       token: 'f{1,4}|ms|milliseconds',
       format: function(d) {
-        return d.getMilliseconds();
+        return callDateGet(d, 'Milliseconds');
       }
     },
     {
       token: 'ss?|seconds',
       format: function(d, len) {
-        return d.getSeconds();
+        return callDateGet(d, 'Seconds');
       }
     },
     {
       token: 'mm?|minutes',
       format: function(d, len) {
-        return d.getMinutes();
+        return callDateGet(d, 'Minutes');
       }
     },
     {
@@ -2042,45 +2103,48 @@
     {
       token: 'HH?|24hr',
       format: function(d) {
-        return d.getHours();
+        return callDateGet(d, 'Hours');
       }
     },
     {
       token: 'dd?|date|day',
       format: function(d) {
-        return d.getDate();
+        return callDateGet(d, 'Date');
       }
     },
     {
       token: 'dow|weekday',
       word: true,
       format: function(d, loc, n, t) {
-        return loc['weekdays'][d.getDay() + (n - 1) * 7];
+        var dow = callDateGet(d, 'Day');
+        return loc['weekdays'][dow + (n - 1) * 7];
       }
     },
     {
       token: 'MM?',
       format: function(d) {
-        return d.getMonth() + 1;
+        return callDateGet(d, 'Month') + 1;
       }
     },
     {
       token: 'mon|month',
       word: true,
       format: function(d, loc, n, len) {
-        return loc['months'][d.getMonth() + (n - 1) * 12];
+        var month = callDateGet(d, 'Month');
+        return loc['months'][month + (n - 1) * 12];
       }
     },
     {
       token: 'y{2,4}|year',
       format: function(d) {
-        return d.getFullYear();
+        return callDateGet(d, 'FullYear');
       }
     },
     {
       token: '[Tt]{1,2}',
       format: function(d, loc, n, format) {
-        var str = loc['ampm'][floor(d.getHours() / 12)];
+        var hours = callDateGet(d, 'Hours');
+        var str = loc['ampm'][floor(hours / 12)];
         if(format.length === 1) str = str.slice(0,1);
         if(format.slice(0,1) === 'T') str = str.toUpperCase();
         return str;
@@ -2108,8 +2172,8 @@
     {
       token: 'ord',
       format: function(d) {
-        var d = d.getDate();
-        return d + getOrdinalizedSuffix(d);
+        var date = callDateGet(d, 'Date');
+        return date + getOrdinalizedSuffix(date);
       }
     }
   ];
@@ -2118,6 +2182,7 @@
     {
       unit: 'year',
       method: 'FullYear',
+      ambiguous: true,
       multiplier: function(d) {
         var adjust = d ? (d.isLeapYear() ? 1 : 0) : 0.25;
         return (365 + adjust) * 24 * 60 * 60 * 1000;
@@ -2247,6 +2312,10 @@
       return code === 'en' || code === 'en-US' ? true : this['variant'];
     },
 
+    matchAM: function(str) {
+      return str === this['ampm'][0];
+    },
+
     matchPM: function(str) {
       return str === this['ampm'][1];
     },
@@ -2341,7 +2410,7 @@
   }
 
   function setLocalization(localeCode, set) {
-    var loc;
+    var loc, canAbbreviate;
 
     function initializeField(name) {
       var val = loc[name];
@@ -2365,16 +2434,15 @@
 
     function setArray(name, abbreviate, multiple) {
       var arr = [];
-      if(!loc[name]) return;
-      loc[name].forEach(function(el, i) {
-        eachAlternate(el, function(str, j) {
-          arr[j * multiple + i] = str.toLowerCase();
+      loc[name].forEach(function(full, i) {
+        if(abbreviate) {
+          full += '+' + full.slice(0,3);
+        }
+        eachAlternate(full, function(day, j) {
+          arr[j * multiple + i] = day.toLowerCase();
         });
       });
-      if(abbreviate) arr = arr.concat(loc[name].map(function(str) {
-        return str.slice(0,3).toLowerCase();
-      }));
-      return loc[name] = arr;
+      loc[name] = arr;
     }
 
     function getDigit(start, stop, allowNumbers) {
@@ -2410,8 +2478,10 @@
     initializeField('modifiers');
     'months,weekdays,units,numbers,articles,optionals,timeMarker,ampm,timeSuffixes,dateParse,timeParse'.split(',').forEach(initializeField);
 
-    setArray('months', true, 12);
-    setArray('weekdays', true, 7);
+    canAbbreviate = !loc['monthSuffix'];
+
+    setArray('months',   canAbbreviate, 12);
+    setArray('weekdays', canAbbreviate, 7);
     setArray('units', false, 8);
     setArray('numbers', false, 10);
 
@@ -2497,10 +2567,12 @@
   function getDateParamsFromString(str, num) {
     var params = {};
     match = str.match(/^(\d+)?\s?(\w+?)s?$/i);
-    if(isUndefined(num)) {
-      num = parseInt(match[1]) || 1;
+    if(match) {
+      if(isUndefined(num)) {
+        num = parseInt(match[1]) || 1;
+      }
+      params[match[2].toLowerCase()] = num;
     }
-    params[match[2].toLowerCase()] = num;
     return params;
   }
 
@@ -2546,14 +2618,17 @@
     });
   }
 
-  function getExtendedDate(f, localeCode, prefer) {
+  function getExtendedDate(f, localeCode, prefer, forceUTC) {
     var d = new date(), relative = false, baseLocalization, loc, format, set, unit, weekday, num, tmp, after;
+
+    d.utc(forceUTC);
+
     if(isDate(f)) {
       d = f.clone();
     } else if(isNumber(f)) {
       d = new date(f);
     } else if(isObject(f)) {
-      d = new date().set(f, true);
+      d.set(f, true);
       set = f;
     } else if(isString(f)) {
 
@@ -2571,6 +2646,11 @@
             format = dif;
             loc = format.locale;
             set = getFormatMatch(match, format.to, loc);
+
+            if(set['utc']) {
+              d.utc();
+            }
+
             loc.cachedFormat = format;
 
             if(set.timestamp) {
@@ -2619,7 +2699,8 @@
                 // to be set after the actual set because it requires overriding the "prefer" argument which
                 // could unintentionally send the year into the future, past, etc.
                 after = function() {
-                  updateDate(d, { 'weekday': weekday + (7 * (set['num'] - 1)) }, false, false, false, 1);
+                  var w = d.getWeekday();
+                  d.setWeekday((7 * (set['num'] - 1)) + (w > weekday ? weekday + 7 : weekday));
                 }
                 set['day'] = 1;
               } else {
@@ -2634,11 +2715,13 @@
             // If the time is 1pm-11pm advance the time by 12 hours.
             if(loc.matchPM(set['ampm']) && set['hour'] < 12) {
               set['hour'] += 12;
+            } else if(loc.matchAM(set['ampm']) && set['hour'] === 12) {
+              set['hour'] = 0;
             }
 
             // Adjust for timezone offset
             if('offset_hours' in set || 'offset_minutes' in set) {
-              set['utc'] = true;
+              d.utc();
               set['offset_minutes'] = set['offset_minutes'] || 0;
               set['offset_minutes'] += set['offset_hours'] * 60;
               if(set['offset_sign'] === '-') {
@@ -2707,12 +2790,12 @@
       } else if(relative) {
         d.advance(set);
       } else {
-        if(set['utc']) {
+        if(d._utc) {
           // UTC times can traverse into other days or even months,
           // so preemtively reset the time here to prevent this.
           d.reset();
         }
-        updateDate(d, set, true, set['utc'], false, prefer);
+        updateDate(d, set, true, false, prefer);
       }
 
       // If there is an "edge" it needs to be set after the
@@ -2744,17 +2827,18 @@
 
   // If the year is two digits, add the most appropriate century prefix.
   function getYearFromAbbreviation(year) {
-    return round(new date().getFullYear() / 100) * 100 - round(year / 100) * 100 + year;
+    return round(callDateGet(new date(), 'FullYear') / 100) * 100 - round(year / 100) * 100 + year;
   }
 
-  function getShortHour(d, utc) {
-    var hours = callDateMethod(d, 'get', utc, 'Hours');
+  function getShortHour(d) {
+    var hours = callDateGet(d, 'Hours');
     return hours === 0 ? 12 : hours - (floor(hours / 13) * 12);
   }
 
   // weeksSince won't work here as the result needs to be floored, not rounded.
   function getWeekNumber(date) {
-    var dow = date.getDay() || 7;
+    date = date.clone();
+    var dow = callDateGet(date, 'Day') || 7;
     date.addDays(4 - dow).reset();
     return 1 + floor(date.daysSince(date.clone().beginningOfYear()) / 7);
   }
@@ -2815,8 +2899,8 @@
 
   // Date comparison helpers
 
-  function compareDate(d, find, buffer) {
-    var p = getExtendedDate(find), accuracy = 0, loBuffer = 0, hiBuffer = 0, override, capitalized;
+  function compareDate(d, find, buffer, forceUTC) {
+    var p = getExtendedDate(find, null, null, forceUTC), accuracy = 0, loBuffer = 0, hiBuffer = 0, override, capitalized;
     if(buffer > 0) {
       loBuffer = hiBuffer = buffer;
       override = true;
@@ -2845,12 +2929,11 @@
     var t   = d.getTime();
     var min = p.date.getTime();
     var max = max || (min + accuracy);
-    // Offset any shift that may occur as a result of DST traversal.
     return t >= (min - loBuffer) && t <= (max + hiBuffer);
   }
 
-  function updateDate(d, params, reset, utc, advance, prefer) {
-    var weekday;
+  function updateDate(d, params, reset, advance, prefer) {
+    var weekday, specificityIndex;
 
     function getParam(key) {
       return isDefined(params[key]) ? params[key] : params[key + 's'];
@@ -2860,8 +2943,9 @@
       return isDefined(getParam(key));
     }
 
-    function canDisambiguate(u, higherUnit) {
-      return prefer && u.ambiguous && !paramExists(higherUnit.unit);
+    function canDisambiguate() {
+      var now = new date;
+      return (prefer === -1 && d > now) || (prefer === 1 && d < now);
     }
 
     if(isNumber(params) && advance) {
@@ -2885,10 +2969,11 @@
       var isDay = u.unit === 'day';
       if(paramExists(u.unit) || (isDay && paramExists('weekday'))) {
         params.specificity = u.unit;
+        specificityIndex = +i;
         return false;
       } else if(reset && u.unit !== 'week' && (!isDay || !paramExists('week'))) {
         // Days are relative to months, not weeks, so don't reset if a week exists.
-        callDateMethod(d, 'set', utc, u.method, (isDay ? 1 : 0));
+        callDateSet(d, u.method, (isDay ? 1 : 0));
       }
     });
 
@@ -2897,23 +2982,12 @@
       var unit = u.unit, method = u.method, higherUnit = DateUnits[i - 1], value;
       value = getParam(unit)
       if(isUndefined(value)) return;
-      if(canDisambiguate(u, higherUnit)) {
-        // Formats like "June" have an ambiguous year. If no preference is stated, this
-        // is fine as "June of this year", however in a future context, this would mean
-        // "the next June", which may be either this year or next year. If we have an
-        // ambiguity *and* a preference for resolving it, then advance or rewind the
-        // higher order as necessary. Note that weekdays are handled differently below.
-        var current = callDateMethod(new date, 'get', utc, u.method);
-        if(current >= value === (prefer === 1)) {
-          d[higherUnit.addMethod](prefer);
-        }
-      }
       if(advance) {
         if(unit === 'week') {
           value  = (params['day'] || 0) + (value * 7);
           method = 'Date';
         }
-        value = (value * advance) + callDateMethod(d, 'get', false, method);
+        value = (value * advance) + callDateGet(d, method);
       } else if(unit === 'month' && paramExists('day')) {
         // When setting the month, there is a chance that we will traverse into a new month.
         // This happens in DST shifts, for example June 1st DST jumping to January 1st
@@ -2929,9 +3003,9 @@
         // TL;DR This method avoids the edges of a month IF not advancing and the date is going
         // to be set anyway, while checkMonthTraversal resets the date to the last day if advancing.
         //
-        d.setDate(15);
+        callDateSet(d, 'Date', 15);
       }
-      callDateMethod(d, 'set', utc, method, value);
+      callDateSet(d, method, value);
       if(advance && unit === 'month') {
         checkMonthTraversal(d, value);
       }
@@ -2941,24 +3015,27 @@
     // to reflect the updated date so that resetting works properly.
     if(!advance && !paramExists('day') && paramExists('weekday')) {
       var weekday = getParam('weekday'), isAhead, futurePreferred;
-      if(isDefined(prefer)) {
-        // If there is a preference as to whether this weekday is in the future,
-        // then add an offset as needed. NOTE: Was previously doing something much
-        // more one-liner-hipster here, but it made Opera choke (order of operations
-        // bug??) ... better to be more explicit here anyway.
-       isAhead = callDateMethod(d, 'get', utc, 'Day') - (weekday % 7) >= 0;
-       futurePreferred = prefer === 1;
-       if(isAhead === futurePreferred) {
-         weekday += prefer * 7;
-       }
-      }
-      callDateMethod(d, 'set', utc, 'Weekday', weekday)
+      d.setWeekday(weekday);
+    }
+
+    if(canDisambiguate()) {
+      iterateOverObject(DateUnitsReversed.slice(specificityIndex + 1), function(i,u) {
+        var ambiguous = u.ambiguous || (u.unit === 'week' && paramExists('weekday'));
+        if(ambiguous && !paramExists(u.unit)) {
+          d[u.addMethod](prefer);
+          return false;
+        }
+      });
     }
     return d;
   }
 
-  function callDateMethod(d, prefix, utc, method, value) {
-    return d[prefix + (utc ? 'UTC' : '') + method](value);
+  function callDateGet(d, method) {
+    return d['get' + (d._utc ? 'UTC' : '') + method]();
+  }
+
+  function callDateSet(d, method, value) {
+    return d['set' + (d._utc ? 'UTC' : '') + method](value);
   }
 
   // The ISO format allows times strung together without a demarcating ":", so make sure
@@ -2993,20 +3070,22 @@
 
   function checkMonthTraversal(date, targetMonth) {
     if(targetMonth < 0) targetMonth += 12;
-    if(targetMonth % 12 != date.getMonth()) {
-      date.setDate(0);
+    if(targetMonth % 12 != callDateGet(date, 'Month')) {
+      callDateSet(date, 'Date', 0);
     }
   }
 
   function createDate(args, prefer) {
-    var f;
+    var f, localeCode, forceUTC;
     if(isNumber(args[1])) {
       // If the second argument is a number, then we have an enumerated constructor type as in "new Date(2003, 2, 12);"
       f = collectDateArguments(args)[0];
     } else {
-      f = args[0];
+      f          = args[0];
+      localeCode = args[1];
+      forceUTC   = args[2];
     }
-    return getExtendedDate(f, args[1], prefer).date;
+    return getExtendedDate(f, localeCode, prefer, forceUTC).date;
   }
 
   function buildDateUnits() {
@@ -3243,9 +3322,9 @@
         methods['beginningOf' + caps] = function() {
           var set = {};
           switch(unit) {
-            case 'year':  set['year'] = this.getFullYear(); break;
-            case 'month': set['month'] = this.getMonth(); break;
-            case 'day':   set['day'] = this.getDate(); break;
+            case 'year':  set['year']  = callDateGet(this, 'FullYear'); break;
+            case 'month': set['month'] = callDateGet(this, 'Month');    break;
+            case 'day':   set['day']   = callDateGet(this, 'Date');     break;
             case 'week':  set['weekday'] = 0; break;
           }
           return this.set(set, true);
@@ -3358,8 +3437,8 @@
     var weekdays = English['weekdays'].slice(0,7);
     var months   = English['months'].slice(0,12);
     extendSimilar(date, true, false, special.concat(weekdays).concat(months), function(methods, name) {
-      methods['is'+ simpleCapitalize(name)] = function() {
-        return this.is(name);
+      methods['is'+ simpleCapitalize(name)] = function(utc) {
+       return this.is(name, 0, utc);
       };
     });
   }
@@ -3387,10 +3466,10 @@
   date.extend({
 
      /***
-     * @method Date.create(<d>, [locale] = currentLocale)
+     * @method Date.create(<d>, [locale] = currentLocale, [utc] = false)
      * @returns Date
      * @short Alternate Date constructor which understands many different text formats, a timestamp, or another date.
-     * @extra If no argument is given, date is assumed to be now. %Date.create% additionally can accept enumerated parameters as with the standard date constructor. [locale] can be passed to specify the locale that the date is in. When unspecified, the current locale (default is English) is assumed. For more information, see @date_format.
+     * @extra If no argument is given, date is assumed to be now. %Date.create% additionally can accept enumerated parameters as with the standard date constructor. [locale] can be passed to specify the locale that the date is in. When unspecified, the current locale (default is English) is assumed. [utc] indicates a utc-based date. For more information, see @date_format.
      * @example
      *
      *   Date.create('July')          -> July of this year
@@ -3409,7 +3488,7 @@
     },
 
      /***
-     * @method Date.past(<d>, [locale] = currentLocale)
+     * @method Date.past(<d>, [locale] = currentLocale, [utc] = false)
      * @returns Date
      * @short Alternate form of %Date.create% with any ambiguity assumed to be the past.
      * @extra For example %"Sunday"% can be either "the Sunday coming up" or "the Sunday last" depending on context. Note that dates explicitly in the future ("next Sunday") will remain in the future. This method simply provides a hint when ambiguity exists.
@@ -3424,7 +3503,7 @@
     },
 
      /***
-     * @method Date.future(<d>, [locale] = currentLocale)
+     * @method Date.future(<d>, [locale] = currentLocale, [utc] = false)
      * @returns Date
      * @short Alternate form of %Date.create% with any ambiguity assumed to be the future.
      * @extra For example %"Sunday"% can be either "the Sunday coming up" or "the Sunday last" depending on context. Note that dates explicitly in the past ("last Sunday") will remain in the past. This method simply provides a hint when ambiguity exists.
@@ -3497,10 +3576,7 @@
      * @method set(<set>, [reset] = false)
      * @returns Date
      * @short Sets the date object.
-     * @extra This method can accept multiple formats including a single number as a timestamp, an object, or enumerated parameters (as with the Date constructor). If [reset] is %true%, any units more specific than those passed will be reset. %setUTC% will set the date according to universal time.
-     *
-     * @set
-     *   setUTC
+     * @extra This method can accept multiple formats including a single number as a timestamp, an object, or enumerated parameters (as with the Date constructor). If [reset] is %true%, any units more specific than those passed will be reset.
      *
      * @example
      *
@@ -3515,19 +3591,10 @@
       return updateDate(this, args[0], args[1])
     },
 
-    'setUTC': function() {
-      var args = collectDateArguments(arguments);
-      return updateDate(this, args[0], args[1], true)
-    },
-
      /***
      * @method setWeekday()
      * @returns Nothing
      * @short Sets the weekday of the date.
-     * @extra %setUTCWeekday% sets according to universal time.
-     *
-     * @set
-     *   setUTCWeekday
      *
      * @example
      *
@@ -3537,22 +3604,13 @@
      ***/
     'setWeekday': function(dow) {
       if(isUndefined(dow)) return;
-      this.setDate(this.getDate() + dow - this.getDay());
-    },
-
-    'setUTCWeekday': function(dow) {
-      if(isUndefined(dow)) return;
-      this.setDate(this.getUTCDate() + dow - this.getDay());
+      return callDateSet(this, 'Date', callDateGet(this, 'Date') + dow - callDateGet(this, 'Day'));
     },
 
      /***
      * @method setWeek()
      * @returns Nothing
      * @short Sets the week (of the year).
-     * @extra %setUTCWeek% sets according to universal time.
-     *
-     * @set
-     *   setUTCWeek
      *
      * @example
      *
@@ -3561,39 +3619,25 @@
      ***/
     'setWeek': function(week) {
       if(isUndefined(week)) return;
-      var date = this.getDate();
-      this.setMonth(0);
-      this.setDate((week * 7) + 1);
-    },
-
-    'setUTCWeek': function(week) {
-      if(isUndefined(week)) return;
-      var date = this.getUTCDate();
-      this.setMonth(0);
-      this.setUTCDate((week * 7) + 1);
+      var date = callDateGet(this, 'Date');
+      callDateSet(this, 'Month', 0);
+      callDateSet(this, 'Date', (week * 7) + 1);
+      return this.getTime();
     },
 
      /***
      * @method getWeek()
      * @returns Number
      * @short Gets the date's week (of the year).
-     * @extra %getUTCWeek% gets the week according to universal time.
-     *
-     * @set
-     *   getUTCWeek
+     * @extra If %utc% is set on the date, the week will be according to UTC time.
      *
      * @example
      *
      *   new Date().getWeek()    -> today's week of the year
-     *   new Date().getUTCWeek() -> today's week of the year
      *
      ***/
     'getWeek': function() {
       return getWeekNumber(this);
-    },
-
-    'getUTCWeek': function() {
-      return getWeekNumber(this.toUTC());
     },
 
      /***
@@ -3607,27 +3651,26 @@
      *
      ***/
     'getUTCOffset': function(iso) {
-      var offset = this.utc ? 0 : this.getTimezoneOffset();
+      var offset = this._utc ? 0 : this.getTimezoneOffset();
       var colon  = iso === true ? ':' : '';
       if(!offset && iso) return 'Z';
       return padNumber(round(-offset / 60), 2, true) + colon + padNumber(offset % 60, 2);
     },
 
      /***
-     * @method toUTC()
+     * @method utc([on] = true)
      * @returns Date
-     * @short Converts the date to UTC time, effectively subtracting the timezone offset.
-     * @extra Note here that the method %getTimezoneOffset% will still show an offset even after this method is called, as this method effectively just rewinds the date. %format% however, will correctly set the %{tz}% (timezone) token as UTC once this method has been called on the date, and %isUTC% will return %true%. Once a date is set to UTC the only way to unset is the %clone% method.
+     * @short Sets the internal utc flag for the date. When on, UTC-based methods will be called internally.
+     * @extra For more see @date_format.
      * @example
      *
-     *   new Date().toUTC() -> current time in UTC
+     *   new Date().utc(true)
+     *   new Date().utc(false)
      *
      ***/
-    'toUTC': function() {
-      if(this.utc) return this;
-      var d = this.clone().addMinutes(this.getTimezoneOffset());
-      d.utc = true;
-      return d;
+    'utc': function(set) {
+      this._utc = set === true || arguments.length === 0;
+      return this;
     },
 
      /***
@@ -3642,7 +3685,7 @@
      *
      ***/
     'isUTC': function() {
-      return this.utc || this.getTimezoneOffset() === 0;
+      return !!this._utc || this.getTimezoneOffset() === 0;
     },
 
      /***
@@ -3660,7 +3703,7 @@
      ***/
     'advance': function() {
       var args = collectDateArguments(arguments, true);
-      return updateDate(this, args[0], args[1], false, 1);
+      return updateDate(this, args[0], args[1], 1);
     },
 
      /***
@@ -3677,7 +3720,7 @@
      ***/
     'rewind': function() {
       var args = collectDateArguments(arguments, true);
-      return updateDate(this, args[0], args[1], false, -1);
+      return updateDate(this, args[0], args[1], -1);
     },
 
      /***
@@ -3705,7 +3748,7 @@
      *   new Date().isAfter('yesterday') -> true
      *
      ***/
-    'isAfter': function(d, margin) {
+    'isAfter': function(d, margin, utc) {
       return this.getTime() > date.create(d).getTime() - (margin || 0);
     },
 
@@ -3755,7 +3798,7 @@
      *
      ***/
     'isLeapYear': function() {
-      var year = this.getFullYear();
+      var year = callDateGet(this, 'FullYear');
       return (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
     },
 
@@ -3770,7 +3813,7 @@
      *
      ***/
     'daysInMonth': function() {
-      return 32 - new date(this.getFullYear(), this.getMonth(), 32).getDate();
+      return 32 - callDateGet(new date(callDateGet(this, 'FullYear'), callDateGet(this, 'Month'), 32), 'Date');
     },
 
      /***
@@ -3840,21 +3883,22 @@
      *   Date.create().is(new Date(1776, 6, 4)) -> false
      *
      ***/
-    'is': function(d, margin) {
-      var tmp;
+    'is': function(d, margin, utc) {
+      var tmp, comp;
       if(!this.isValid()) return;
       if(isString(d)) {
         d = d.trim().toLowerCase();
+        comp = this.clone().utc(utc);
         switch(true) {
           case d === 'future':  return this.getTime() > new date().getTime();
           case d === 'past':    return this.getTime() < new date().getTime();
-          case d === 'weekday': return this.getDay() > 0 && this.getDay() < 6;
-          case d === 'weekend': return this.getDay() === 0 || this.getDay() === 6;
-          case (tmp = English['weekdays'].indexOf(d) % 7) > -1: return this.getDay() === tmp;
-          case (tmp = English['months'].indexOf(d) % 12) > -1:  return this.getMonth() === tmp;
+          case d === 'weekday': return callDateGet(comp, 'Day') > 0 && callDateGet(comp, 'Day') < 6;
+          case d === 'weekend': return callDateGet(comp, 'Day') === 0 || callDateGet(comp, 'Day') === 6;
+          case (tmp = English['weekdays'].indexOf(d) % 7) > -1: return callDateGet(comp, 'Day') === tmp;
+          case (tmp = English['months'].indexOf(d) % 12) > -1:  return callDateGet(comp, 'Month') === tmp;
         }
       }
-      return compareDate(this, d, margin);
+      return compareDate(this, d, margin, utc);
     },
 
      /***
@@ -3888,7 +3932,9 @@
      *
      ***/
     'clone': function() {
-      return new date(this.getTime());
+      var d = new date(this.getTime());
+      d._utc = this._utc;
+      return d;
     }
 
   });
@@ -4257,17 +4303,29 @@
      *
      ***/
     'every': function(increment, fn) {
-      var current = this.start.clone(), result = [], index = 0, params;
+      var current = this.start.clone(), result = [], index = 0, params, isDay;
       if(isString(increment)) {
         current.advance(getDateParamsFromString(increment, 0), true);
         params = getDateParamsFromString(increment);
+        isDay = increment.toLowerCase() === 'day';
       } else {
         params = { 'milliseconds': increment };
       }
       while(current <= this.end) {
         result.push(current);
         if(fn) fn(current, index);
-        current = current.clone().advance(params, true);
+        if(isDay && callDateGet(current, 'Hours') === 23) {
+          // When DST traversal happens at 00:00 hours, the time is effectively
+          // pushed back to 23:00, meaning 1) 00:00 for that day does not exist,
+          // and 2) there is no difference between 23:00 and 00:00, as you are
+          // "jumping" around in time. Hours here will be reset before the date
+          // is advanced and the date will never in fact advance, so set the hours
+          // directly ahead to the next day to avoid this problem.
+          current = current.clone();
+          callDateSet(current, 'Hours', 48);
+        } else {
+          current = current.clone().advance(params, true);
+        }
         index++;
       }
       return result;
@@ -4313,14 +4371,14 @@
    * @short Increments through the date range for each [unit], calling [fn] if it is passed. Returns an array of each increment visited.
    *
    * @set
-   *   eachMillisecond()
-   *   eachSecond()
-   *   eachMinute()
-   *   eachHour()
-   *   eachDay()
-   *   eachWeek()
-   *   eachMonth()
-   *   eachYear()
+   *   eachMillisecond
+   *   eachSecond
+   *   eachMinute
+   *   eachHour
+   *   eachDay
+   *   eachWeek
+   *   eachMonth
+   *   eachYear
    *
    * @example
    *
@@ -4361,13 +4419,14 @@
    ***/
 
   function setDelay(fn, ms, after, scope, args) {
+    var index;
     if(!fn.timers) fn.timers = [];
     if(!isNumber(ms)) ms = 0;
     fn.timers.push(setTimeout(function(){
       fn.timers.splice(index, 1);
       after.apply(scope, args || []);
     }, ms));
-    var index = fn.timers.length;
+    index = fn.timers.length;
   }
 
   extend(Function, true, false, {
@@ -4468,10 +4527,11 @@
      ***/
     'debounce': function(ms) {
       var fn = this;
-      return function() {
-        fn.cancel();
-        setDelay(fn, ms, fn, this, arguments);
-      }
+      function debounced() {
+        debounced.cancel();
+        setDelay(debounced, ms, fn, this, arguments);
+      };
+      return debounced;
     },
 
      /***
@@ -5068,7 +5128,7 @@
       var method = 'is' + name;
       ObjectTypeMethods.push(method);
       methods[method] = function(obj) {
-        return isClass(obj, name);
+        return className(obj) === '[object '+name+']';
       }
     });
   }
@@ -5163,7 +5223,7 @@
      *
      ***/
     'equal': function(a, b) {
-      return stringify(a) === stringify(b);
+      return isEqual(a, b);
     },
 
     /***
