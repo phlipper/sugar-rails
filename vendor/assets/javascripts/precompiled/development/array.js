@@ -16,7 +16,7 @@
     } else if(isRegExp(match) && isString(el)) {
       // Match against a regexp
       return regexp(match).test(el);
-    } else if(isFunction(match)) {
+    } else if(isFunction(match) && !isFunction(el)) {
       // Match against a filtering function
       return match.apply(scope, params);
     } else if(isObject(match) && isObjectPrimitive(el)) {
@@ -263,63 +263,6 @@
 
 
 
-  /***
-   * @method every(<f>, [scope])
-   * @returns Boolean
-   * @short Returns true if all elements in the array match <f>.
-   * @extra [scope] is the %this% object. In addition to providing this method for browsers that don't support it natively, this enhanced method also directly accepts strings, numbers, deep objects, and arrays for <f>. %all% is provided an alias.
-   * @example
-   *
-   +   ['a','a','a'].every(function(n) {
-   *     return n == 'a';
-   *   });
-   *   ['a','a','a'].every('a')   -> true
-   *   [{a:2},{a:2}].every({a:2}) -> true
-   *
-   ***
-   * @method some(<f>, [scope])
-   * @returns Boolean
-   * @short Returns true if any element in the array matches <f>.
-   * @extra [scope] is the %this% object. In addition to providing this method for browsers that don't support it natively, this enhanced method also directly accepts strings, numbers, deep objects, and arrays for <f>. %any% is provided as aliases.
-   * @example
-   *
-   +   ['a','b','c'].some(function(n) {
-   *     return n == 'a';
-   *   });
-   +   ['a','b','c'].some(function(n) {
-   *     return n == 'd';
-   *   });
-   *   ['a','b','c'].some('a')   -> true
-   *   [{a:2},{b:5}].some({a:2}) -> true
-   *
-   ***
-   * @method map(<map>, [scope])
-   * @returns Array
-   * @short Maps the array to another array containing the values that are the result of calling <map> on each element.
-   * @extra [scope] is the %this% object. In addition to providing this method for browsers that don't support it natively, this enhanced method also directly accepts a string, which is a shortcut for a function that gets that property (or invokes a function) on each element.
-   * @example
-   *
-   +   [1,2,3].map(function(n) {
-   *     return n * 3;
-   *   });                                  -> [3,6,9]
-   *   ['one','two','three'].map(function(n) {
-   *     return n.length;
-   *   });                                  -> [3,3,5]
-   *   ['one','two','three'].map('length')  -> [3,3,5]
-   *
-   ***
-   * @method filter(<f>, [scope])
-   * @returns Array
-   * @short Returns any elements in the array that match <f>.
-   * @extra [scope] is the %this% object. In addition to providing this method for browsers that don't support it natively, this enhanced method also directly accepts strings, numbers, deep objects, and arrays for <f>.
-   * @example
-   *
-   +   [1,2,3].filter(function(n) {
-   *     return n > 1;
-   *   });
-   *   [1,2,2,4].filter(2) -> 2
-   *
-   ***/
   function buildEnhancements() {
     var callbackCheck = function() { var a = arguments; return a.length > 0 && !isFunction(a[0]); };
     extendSimilar(array, true, callbackCheck, 'map,every,all,some,any,none,filter', function(methods, name) {
@@ -390,7 +333,7 @@
      * @method find(<f>, [index] = 0, [loop] = false)
      * @returns Mixed
      * @short Returns the first element that matches <f>.
-     * @extra <f> will match a string, number, array, object, or alternately test against a function or regex. Starts at [index], and will continue once from index = 0 if [loop] is true.
+     * @extra <f> will match a string, number, array, object, or alternately test against a function or regex. Starts at [index], and will continue once from index = 0 if [loop] is true. This method implements @array_matching.
      * @example
      *
      +   [{a:1,b:2},{a:1,b:3},{a:1,b:4}].find(function(n) {
@@ -407,7 +350,7 @@
      * @method findAll(<f>, [index] = 0, [loop] = false)
      * @returns Array
      * @short Returns all elements that match <f>.
-     * @extra <f> will match a string, number, array, object, or alternately test against a function or regex. Starts at [index], and will continue once from index = 0 if [loop] is true.
+     * @extra <f> will match a string, number, array, object, or alternately test against a function or regex. Starts at [index], and will continue once from index = 0 if [loop] is true. This method implements @array_matching.
      * @example
      *
      +   [{a:1,b:2},{a:1,b:3},{a:2,b:4}].findAll(function(n) {
@@ -431,7 +374,7 @@
      * @method findIndex(<f>, [startIndex] = 0, [loop] = false)
      * @returns Number
      * @short Returns the index of the first element that matches <f> or -1 if not found.
-     * @extra This method has a few notable differences to native %indexOf%. Although <f> will similarly match a primitive such as a string or number, it will also match deep objects and arrays that are not equal by reference (%===%). Additionally, if a function is passed it will be run as a matching function (similar to the behavior of %Array#filter%) rather than attempting to find that function itself by reference in the array. Finally, a regexp will be matched against elements in the array, presumed to be strings. Starts at [index], and will continue once from index = 0 if [loop] is true.
+     * @extra This method has a few notable differences to native %indexOf%. Although <f> will similarly match a primitive such as a string or number, it will also match deep objects and arrays that are not equal by reference (%===%). Additionally, if a function is passed it will be run as a matching function (similar to the behavior of %Array#filter%) rather than attempting to find that function itself by reference in the array. Starts at [index], and will continue once from index = 0 if [loop] is true. This method implements @array_matching.
      * @example
      *
      +   [1,2,3,4].findIndex(3);  -> 2
@@ -450,7 +393,7 @@
      * @method count(<f>)
      * @returns Number
      * @short Counts all elements in the array that match <f>.
-     * @extra <f> will match a string, number, array, object, or alternately test against a function or regex.
+     * @extra <f> will match a string, number, array, object, or alternately test against a function or regex. This method implements @array_matching.
      * @example
      *
      *   [1,2,3,1].count(1)       -> 2
@@ -504,7 +447,7 @@
      * @method exclude([f1], [f2], ...)
      * @returns Array
      * @short Removes any element in the array that matches [f1], [f2], etc.
-     * @extra This is a non-destructive alias for %remove%. It will not change the original array.
+     * @extra This is a non-destructive alias for %remove%. It will not change the original array. This method implements @array_matching.
      * @example
      *
      *   [1,2,3].exclude(3)         -> [1,2]
@@ -1013,7 +956,7 @@
      * @method remove([f1], [f2], ...)
      * @returns Array
      * @short Removes any element in the array that matches [f1], [f2], etc.
-     * @extra Will match a string, number, array, object, or alternately test against a function or regex. This method will change the array! Use %exclude% for a non-destructive alias.
+     * @extra Will match a string, number, array, object, or alternately test against a function or regex. This method will change the array! Use %exclude% for a non-destructive alias. This method implements @array_matching.
      * @example
      *
      *   [1,2,3].remove(3)         -> [1,2]
@@ -1094,7 +1037,7 @@
      * @method none(<f>)
      * @returns Boolean
      * @short Returns true if none of the elements in the array match <f>.
-     * @extra <f> will match a string, number, array, object, or alternately test against a function or regex.
+     * @extra <f> will match a string, number, array, object, or alternately test against a function or regex. This method implements @array_matching.
      * @example
      *
      *   [1,2,3].none(5)         -> true
