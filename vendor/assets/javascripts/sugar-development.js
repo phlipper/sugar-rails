@@ -1,5 +1,5 @@
 /*
- *  Sugar Library v1.3.3
+ *  Sugar Library v1.3.4
  *
  *  Freely distributable and licensed under the MIT-style license.
  *  Copyright (c) 2012 Andrew Plummer
@@ -2800,9 +2800,7 @@
       }
 
     }
-    if(!forceUTC) {
-      d.utc(false);
-    }
+    d.utc(false);
     return {
       date: d,
       set: set
@@ -3059,15 +3057,14 @@
     }
   }
 
-  function createDate(args, prefer) {
-    var f, localeCode, forceUTC;
+  function createDate(args, prefer, forceUTC) {
+    var f, localeCode;
     if(isNumber(args[1])) {
       // If the second argument is a number, then we have an enumerated constructor type as in "new Date(2003, 2, 12);"
       f = collectDateArguments(args)[0];
     } else {
       f          = args[0];
       localeCode = args[1];
-      forceUTC   = args[2];
     }
     return getExtendedDate(f, localeCode, prefer, forceUTC).date;
   }
@@ -3427,6 +3424,26 @@
     });
   }
 
+  function buildUTCAliases() {
+    date.extend({
+      'utc': {
+
+        'create': function() {
+          return createDate(arguments, 0, true);
+        },
+
+        'past': function() {
+          return createDate(arguments, -1, true);
+        },
+
+        'future': function() {
+          return createDate(arguments, 1, true);
+        }
+
+      }
+    }, false, false);
+  }
+
   function setDateProperties() {
     date.extend({
       'RFC1123': '{Dow}, {dd} {Mon} {yyyy} {HH}:{mm}:{ss} {tz}',
@@ -3436,24 +3453,17 @@
     }, false, false);
   }
 
-  function buildDate() {
-    buildDateUnits();
-    buildDateMethods();
-    buildCoreInputFormats();
-    buildDateOutputShortcuts();
-    buildAsianDigits();
-    buildRelativeAliases();
-    setDateProperties();
-  }
-
 
   date.extend({
 
      /***
-     * @method Date.create(<d>, [locale] = currentLocale, [utc] = false)
+     * @method Date.create(<d>, [locale] = currentLocale)
      * @returns Date
      * @short Alternate Date constructor which understands many different text formats, a timestamp, or another date.
-     * @extra If no argument is given, date is assumed to be now. %Date.create% additionally can accept enumerated parameters as with the standard date constructor. [locale] can be passed to specify the locale that the date is in. When unspecified, the current locale (default is English) is assumed. [utc] indicates a utc-based date. For more information, see @date_format.
+     * @extra If no argument is given, date is assumed to be now. %Date.create% additionally can accept enumerated parameters as with the standard date constructor. [locale] can be passed to specify the locale that the date is in. When unspecified, the current locale (default is English) is assumed. UTC-based dates can be created through the %utc% object. For more see @date_format.
+     * @set
+     *   Date.utc.create
+     *
      * @example
      *
      *   Date.create('July')          -> July of this year
@@ -3465,6 +3475,7 @@
      *   Date.create(-446806800000)   -> November 5, 1955
      *   Date.create(1776, 6, 4)      -> July 4, 1776
      *   Date.create('1776年07月04日', 'ja') -> July 4, 1776
+     *   Date.utc.create('July 4, 1776', 'en')  -> July 4, 1776
      *
      ***/
     'create': function() {
@@ -3472,10 +3483,12 @@
     },
 
      /***
-     * @method Date.past(<d>, [locale] = currentLocale, [utc] = false)
+     * @method Date.past(<d>, [locale] = currentLocale)
      * @returns Date
      * @short Alternate form of %Date.create% with any ambiguity assumed to be the past.
-     * @extra For example %"Sunday"% can be either "the Sunday coming up" or "the Sunday last" depending on context. Note that dates explicitly in the future ("next Sunday") will remain in the future. This method simply provides a hint when ambiguity exists.
+     * @extra For example %"Sunday"% can be either "the Sunday coming up" or "the Sunday last" depending on context. Note that dates explicitly in the future ("next Sunday") will remain in the future. This method simply provides a hint when ambiguity exists. UTC-based dates can be created through the %utc% object. For more, see @date_format.
+     * @set
+     *   Date.utc.past
      * @example
      *
      *   Date.past('July')          -> July of this year or last depending on the current month
@@ -3487,10 +3500,13 @@
     },
 
      /***
-     * @method Date.future(<d>, [locale] = currentLocale, [utc] = false)
+     * @method Date.future(<d>, [locale] = currentLocale)
      * @returns Date
      * @short Alternate form of %Date.create% with any ambiguity assumed to be the future.
-     * @extra For example %"Sunday"% can be either "the Sunday coming up" or "the Sunday last" depending on context. Note that dates explicitly in the past ("last Sunday") will remain in the past. This method simply provides a hint when ambiguity exists.
+     * @extra For example %"Sunday"% can be either "the Sunday coming up" or "the Sunday last" depending on context. Note that dates explicitly in the past ("last Sunday") will remain in the past. This method simply provides a hint when ambiguity exists. UTC-based dates can be created through the %utc% object. For more, see @date_format.
+     * @set
+     *   Date.utc.future
+     *
      * @example
      *
      *   Date.future('July')          -> July of this year or next depending on the current month
@@ -3725,7 +3741,7 @@
      * @method isAfter(<d>, [margin] = 0)
      * @returns Boolean
      * @short Returns true if the date is after the <d>.
-     * @extra [margin] is to allow extra margin of error (in ms). <d> will accept a date object, timestamp, or text format. If not specified, <d> is assumed to be now. See @date_format for more information.
+     * @extra [margin] is to allow extra margin of error (in ms). <d> will accept a date object, timestamp, or text format. If not specified, <d> is assumed to be now. See @date_format for more.
      * @example
      *
      *   new Date().isAfter('tomorrow')  -> false
@@ -3740,7 +3756,7 @@
      * @method isBefore(<d>, [margin] = 0)
      * @returns Boolean
      * @short Returns true if the date is before <d>.
-     * @extra [margin] is to allow extra margin of error (in ms). <d> will accept a date object, timestamp, or text format. If not specified, <d> is assumed to be now. See @date_format for more information.
+     * @extra [margin] is to allow extra margin of error (in ms). <d> will accept a date object, timestamp, or text format. If not specified, <d> is assumed to be now. See @date_format for more.
      * @example
      *
      *   new Date().isBefore('tomorrow')  -> true
@@ -3755,7 +3771,7 @@
      * @method isBetween(<d1>, <d2>, [margin] = 0)
      * @returns Boolean
      * @short Returns true if the date falls between <d1> and <d2>.
-     * @extra [margin] is to allow extra margin of error (in ms). <d1> and <d2> will accept a date object, timestamp, or text format. If not specified, they are assumed to be now. See @date_format for more information.
+     * @extra [margin] is to allow extra margin of error (in ms). <d1> and <d2> will accept a date object, timestamp, or text format. If not specified, they are assumed to be now. See @date_format for more.
      * @example
      *
      *   new Date().isBetween('yesterday', 'tomorrow')    -> true
@@ -3832,7 +3848,7 @@
      * @method relative([fn], [locale] = currentLocale)
      * @returns String
      * @short Returns a relative date string offset to the current time.
-     * @extra [fn] can be passed to provide for more granular control over the resulting string. [fn] is passed 4 arguments: the adjusted value, unit, offset in milliseconds, and a localization object. As an alternate syntax, [locale] can also be passed as the first (and only) parameter. For more information, see @date_format.
+     * @extra [fn] can be passed to provide for more granular control over the resulting string. [fn] is passed 4 arguments: the adjusted value, unit, offset in milliseconds, and a localization object. As an alternate syntax, [locale] can also be passed as the first (and only) parameter. For more, see @date_format.
      * @example
      *
      *   Date.create('90 seconds ago').relative() -> 1 minute ago
@@ -3855,7 +3871,7 @@
      * @method is(<d>, [margin] = 0)
      * @returns Boolean
      * @short Returns true if the date is <d>.
-     * @extra <d> will accept a date object, timestamp, or text format. %is% additionally understands more generalized expressions like month/weekday names, 'today', etc, and compares to the precision implied in <d>. [margin] allows an extra margin of error in milliseconds.  For more information, see @date_format.
+     * @extra <d> will accept a date object, timestamp, or text format. %is% additionally understands more generalized expressions like month/weekday names, 'today', etc, and compares to the precision implied in <d>. [margin] allows an extra margin of error in milliseconds.  For more, see @date_format.
      * @example
      *
      *   Date.create().is('July')               -> true or false?
@@ -3995,7 +4011,7 @@
    * @method [unit]Before([d], [locale] = currentLocale)
    * @returns Date
    * @short Returns a date that is <n> units before [d], where <n> is the number.
-   * @extra [d] will accept a date object, timestamp, or text format. Note that "months" is ambiguous as a unit of time. If the target date falls on a day that does not exist (ie. August 31 -> February 31), the date will be shifted to the last day of the month. Be careful using %monthsBefore% if you need exact precision. See @date_format for more information.
+   * @extra [d] will accept a date object, timestamp, or text format. Note that "months" is ambiguous as a unit of time. If the target date falls on a day that does not exist (ie. August 31 -> February 31), the date will be shifted to the last day of the month. Be careful using %monthsBefore% if you need exact precision. See @date_format for more.
    *
    * @set
    *   millisecondBefore
@@ -4053,7 +4069,7 @@
    * @method [unit]After([d], [locale] = currentLocale)
    * @returns Date
    * @short Returns a date <n> units after [d], where <n> is the number.
-   * @extra [d] will accept a date object, timestamp, or text format. Note that "months" is ambiguous as a unit of time. If the target date falls on a day that does not exist (ie. August 31 -> February 31), the date will be shifted to the last day of the month. Be careful using %monthsAfter% if you need exact precision. See @date_format for more information.
+   * @extra [d] will accept a date object, timestamp, or text format. Note that "months" is ambiguous as a unit of time. If the target date falls on a day that does not exist (ie. August 31 -> February 31), the date will be shifted to the last day of the month. Be careful using %monthsAfter% if you need exact precision. See @date_format for more.
    *
    * @set
    *   millisecondAfter
@@ -4197,7 +4213,14 @@
     ]
   });
 
-  buildDate();
+  buildDateUnits();
+  buildDateMethods();
+  buildCoreInputFormats();
+  buildDateOutputShortcuts();
+  buildAsianDigits();
+  buildRelativeAliases();
+  buildUTCAliases();
+  setDateProperties();
 
 
   /***
