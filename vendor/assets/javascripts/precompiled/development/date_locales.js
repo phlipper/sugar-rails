@@ -3,6 +3,88 @@
  * Date.addLocale(<code>) adds this locale to Sugar.
  * To set the locale globally, simply call:
  *
+ * Date.setLocale('da');
+ *
+ * var locale = Date.getLocale(<code>) will return this object, which
+ * can be tweaked to change the behavior of parsing/formatting in the locales.
+ *
+ * locale.addFormat adds a date format (see this file for examples).
+ * Special tokens in the date format will be parsed out into regex tokens:
+ *
+ * {0} is a reference to an entry in locale.tokens. Output: (?:the)?
+ * {unit} is a reference to all units. Output: (day|week|month|...)
+ * {unit3} is a reference to a specific unit. Output: (hour)
+ * {unit3-5} is a reference to a subset of the units array. Output: (hour|day|week)
+ * {unit?} "?" makes that token optional. Output: (day|week|month)?
+ *
+ * {day} Any reference to tokens in the modifiers array will include all with the same name. Output: (yesterday|today|tomorrow)
+ *
+ * All spaces are optional and will be converted to "\s*"
+ *
+ * Locale arrays months, weekdays, units, numbers, as well as the "src" field for
+ * all entries in the modifiers array follow a special format indicated by a colon:
+ *
+ * minute:|s  = minute|minutes
+ * thicke:n|r = thicken|thicker
+ *
+ * Additionally in the months, weekdays, units, and numbers array these will be added at indexes that are multiples
+ * of the relevant number for retrieval. For example having "sunday:|s" in the units array will result in:
+ *
+ * units: ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sundays']
+ *
+ * When matched, the index will be found using:
+ *
+ * units.indexOf(match) % 7;
+ *
+ * Resulting in the correct index with any number of alternates for that entry.
+ *
+ */
+
+Date.addLocale('da', {
+  'plural': true,
+  'months': 'januar,februar,marts,april,maj,juni,juli,august,september,oktober,november,december',
+  'weekdays': 'søndag|sondag,mandag,tirsdag,onsdag,torsdag,fredag,lørdag|lordag',
+  'units': 'millisekund:|er,sekund:|er,minut:|ter,tim:e|er,dag:|e,ug:e|er|en,måned:|er|en+maaned:|er|en,år:||et+aar:||et',
+  'numbers': 'en|et,to,tre,fire,fem,seks,syv,otte,ni,ti',
+  'tokens': 'den,for',
+  'articles': 'den',
+  'short':'d. {d}. {month} {yyyy}',
+  'long': 'den {d}. {month} {yyyy} {H}:{mm}',
+  'full': '{Weekday} den {d}. {month} {yyyy} {H}:{mm}:{ss}',
+  'past': '{num} {unit} {sign}',
+  'future': '{sign} {num} {unit}',
+  'duration': '{num} {unit}',
+  'ampm': 'am,pm',
+  'modifiers': [
+    { 'name': 'day', 'src': 'forgårs|i forgårs|forgaars|i forgaars', 'value': -2 },
+    { 'name': 'day', 'src': 'i går|igår|i gaar|igaar', 'value': -1 },
+    { 'name': 'day', 'src': 'i dag|idag', 'value': 0 },
+    { 'name': 'day', 'src': 'i morgen|imorgen', 'value': 1 },
+    { 'name': 'day', 'src': 'over morgon|overmorgen|i over morgen|i overmorgen|iovermorgen', 'value': 2 },
+    { 'name': 'sign', 'src': 'siden', 'value': -1 },
+    { 'name': 'sign', 'src': 'om', 'value':  1 },
+    { 'name': 'shift', 'src': 'i sidste|sidste', 'value': -1 },
+    { 'name': 'shift', 'src': 'denne', 'value': 0 },
+    { 'name': 'shift', 'src': 'næste|naeste', 'value': 1 }
+  ],
+  'dateParse': [
+    '{num} {unit} {sign}',
+    '{sign} {num} {unit}',
+    '{1?} {num} {unit} {sign}',
+    '{shift} {unit=5-7}'
+  ],
+  'timeParse': [
+    '{0?} {weekday?} {date?} {month} {year}',
+    '{date} {month}',
+    '{shift} {weekday}'
+  ]
+});
+
+/*
+ *
+ * Date.addLocale(<code>) adds this locale to Sugar.
+ * To set the locale globally, simply call:
+ *
  * Date.setLocale('de');
  *
  * var locale = Date.getLocale(<code>) will return this object, which
@@ -11,7 +93,7 @@
  * locale.addFormat adds a date format (see this file for examples).
  * Special tokens in the date format will be parsed out into regex tokens:
  *
- * {0} is a reference to an entry in locale.optionals. Output: (?:the)?
+ * {0} is a reference to an entry in locale.tokens. Output: (?:the)?
  * {unit} is a reference to all units. Output: (day|week|month|...)
  * {unit3} is a reference to a specific unit. Output: (hour)
  * {unit3-5} is a reference to a subset of the units array. Output: (hour|day|week)
@@ -47,7 +129,7 @@ Date.addLocale('de', {
   'weekdays': 'Sonntag,Montag,Dienstag,Mittwoch,Donnerstag,Freitag,Samstag',
   'units': 'Millisekunde:|n,Sekunde:|n,Minute:|n,Stunde:|n,Tag:|en,Woche:|n,Monat:|en,Jahr:|en',
   'numbers': 'ein:|e|er|en|em,zwei,drei,vier,fuenf,sechs,sieben,acht,neun,zehn',
-  'optionals': 'der',
+  'tokens': 'der',
   'short':'{d}. {Month} {yyyy}',
   'long': '{d}. {Month} {yyyy} {H}:{mm}',
   'full': '{Weekday} {d}. {Month} {yyyy} {H}:{mm}:{ss}',
@@ -91,7 +173,7 @@ Date.addLocale('de', {
  * locale.addFormat adds a date format (see this file for examples).
  * Special tokens in the date format will be parsed out into regex tokens:
  *
- * {0} is a reference to an entry in locale.optionals. Output: (?:the)?
+ * {0} is a reference to an entry in locale.tokens. Output: (?:the)?
  * {unit} is a reference to all units. Output: (day|week|month|...)
  * {unit3} is a reference to a specific unit. Output: (hour)
  * {unit3-5} is a reference to a subset of the units array. Output: (hour|day|week)
@@ -126,7 +208,7 @@ Date.addLocale('es', {
   'weekdays': 'domingo,lunes,martes,miércoles|miercoles,jueves,viernes,sábado|sabado',
   'units': 'milisegundo:|s,segundo:|s,minuto:|s,hora:|s,día|días|dia|dias,semana:|s,mes:|es,año|años|ano|anos',
   'numbers': 'uno,dos,tres,cuatro,cinco,seis,siete,ocho,nueve,diez',
-  'optionals': 'el,de',
+  'tokens': 'el,de',
   'short':'{d} {month} {yyyy}',
   'long': '{d} {month} {yyyy} {H}:{mm}',
   'full': '{Weekday} {d} {month} {yyyy} {H}:{mm}:{ss}',
@@ -148,14 +230,71 @@ Date.addLocale('es', {
   'dateParse': [
     '{sign} {num} {unit}',
     '{num} {unit} {sign}',
-    '{0} {unit=5-7} {shift}',
-    '{0} {shift} {unit=5-7}'
+    '{0?} {unit=5-7} {shift}',
+    '{0?} {shift} {unit=5-7}'
   ],
   'timeParse': [
     '{shift} {weekday}',
     '{weekday} {shift}',
-    '{date?} {1} {month} {1} {year?}'
+    '{date?} {1?} {month} {1?} {year?}'
   ]
+});
+Date.addLocale('fi', {
+    'plural':     true,
+    'timeMarker': 'kello',
+    'ampm':       ',',
+    'months':     'tammikuu,helmikuu,maaliskuu,huhtikuu,toukokuu,kesäkuu,heinäkuu,elokuu,syyskuu,lokakuu,marraskuu,joulukuu',
+    'weekdays':   'sunnuntai,maanantai,tiistai,keskiviikko,torstai,perjantai,lauantai',
+    'units':      'millisekun:ti|tia|teja|tina|nin,sekun:ti|tia|teja|tina|nin,minuut:ti|tia|teja|tina|in,tun:ti|tia|teja|tina|nin,päiv:ä|ää|iä|änä|än,viik:ko|koa|koja|on|kona,kuukau:si|sia|tta|den|tena,vuo:si|sia|tta|den|tena',
+    'numbers':    'yksi|ensimmäinen,kaksi|toinen,kolm:e|as,neljä:s,vii:si|des,kuu:si|des,seitsemä:n|s,kahdeksa:n|s,yhdeksä:n|s,kymmene:n|s',
+    'articles':   '',
+    'optionals':  '',
+    'short':      '{d}. {month}ta {yyyy}',
+    'long':       '{d}. {month}ta {yyyy} kello {H}.{mm}',
+    'full':       '{Weekday}na {d}. {month}ta {yyyy} kello {H}.{mm}',
+    'relative':       function(num, unit, ms, format) {
+      var units = this['units'];
+      function numberWithUnit(mult) {
+        return (num === 1 ? '' : num + ' ') + units[(8 * mult) + unit];
+      }
+      switch(format) {
+        case 'duration':  return numberWithUnit(0);
+        case 'past':      return numberWithUnit(num > 1 ? 1 : 0) + ' sitten';
+        case 'future':    return numberWithUnit(4) + ' päästä';
+      }
+    },
+    'modifiers': [
+        { 'name': 'day',   'src': 'toissa päivänä|toissa päiväistä', 'value': -2 },
+        { 'name': 'day',   'src': 'eilen|eilistä', 'value': -1 },
+        { 'name': 'day',   'src': 'tänään', 'value': 0 },
+        { 'name': 'day',   'src': 'huomenna|huomista', 'value': 1 },
+        { 'name': 'day',   'src': 'ylihuomenna|ylihuomista', 'value': 2 },
+        { 'name': 'sign',  'src': 'sitten|aiemmin', 'value': -1 },
+        { 'name': 'sign',  'src': 'päästä|kuluttua|myöhemmin', 'value': 1 },
+        { 'name': 'edge',  'src': 'viimeinen|viimeisenä', 'value': -2 },
+        { 'name': 'edge',  'src': 'lopussa', 'value': -1 },
+        { 'name': 'edge',  'src': 'ensimmäinen|ensimmäisenä', 'value': 1 },
+        { 'name': 'shift', 'src': 'edellinen|edellisenä|edeltävä|edeltävänä|viime|toissa', 'value': -1 },
+        { 'name': 'shift', 'src': 'tänä|tämän', 'value': 0 },
+        { 'name': 'shift', 'src': 'seuraava|seuraavana|tuleva|tulevana|ensi', 'value': 1 }
+    ],
+    'dateParse': [
+        '{num} {unit} {sign}',
+        '{sign} {num} {unit}',
+        '{num} {unit=4-5} {sign} {day}',
+        '{month} {year}',
+        '{shift} {unit=5-7}'
+    ],
+    'timeParse': [
+        '{0} {num}{1} {day} of {month} {year?}',
+        '{weekday?} {month} {date}{1} {year?}',
+        '{date} {month} {year}',
+        '{shift} {weekday}',
+        '{shift} week {weekday}',
+        '{weekday} {2} {shift} week',
+        '{0} {date}{1} of {month}',
+        '{0}{month?} {date?}{1} of {shift} {unit=6-7}'
+    ]
 });
 /*
  *
@@ -170,7 +309,7 @@ Date.addLocale('es', {
  * locale.addFormat adds a date format (see this file for examples).
  * Special tokens in the date format will be parsed out into regex tokens:
  *
- * {0} is a reference to an entry in locale.optionals. Output: (?:the)?
+ * {0} is a reference to an entry in locale.tokens. Output: (?:the)?
  * {unit} is a reference to all units. Output: (day|week|month|...)
  * {unit3} is a reference to a specific unit. Output: (hour)
  * {unit3-5} is a reference to a subset of the units array. Output: (hour|day|week)
@@ -205,7 +344,7 @@ Date.addLocale('fr', {
   'weekdays': 'dimanche,lundi,mardi,mercredi,jeudi,vendredi,samedi',
   'units': 'milliseconde:|s,seconde:|s,minute:|s,heure:|s,jour:|s,semaine:|s,mois,an:|s|née|nee',
   'numbers': 'un:|e,deux,trois,quatre,cinq,six,sept,huit,neuf,dix',
-  'optionals': ["l'|la|le"],
+  'tokens': ["l'|la|le"],
   'short':'{d} {month} {yyyy}',
   'long': '{d} {month} {yyyy} {H}:{mm}',
   'full': '{Weekday} {d} {month} {yyyy} {H}:{mm}:{ss}',
@@ -226,11 +365,11 @@ Date.addLocale('fr', {
   'dateParse': [
     '{sign} {num} {unit}',
     '{sign} {num} {unit}',
-    '{0} {unit=5-7} {shift}'
+    '{0?} {unit=5-7} {shift}'
   ],
   'timeParse': [
-    '{0} {date?} {month} {year?}',
-    '{0} {weekday} {shift}'
+    '{0?} {date?} {month} {year?}',
+    '{0?} {weekday} {shift}'
   ]
 });
 
@@ -247,7 +386,7 @@ Date.addLocale('fr', {
  * locale.addFormat adds a date format (see this file for examples).
  * Special tokens in the date format will be parsed out into regex tokens:
  *
- * {0} is a reference to an entry in locale.optionals. Output: (?:the)?
+ * {0} is a reference to an entry in locale.tokens. Output: (?:the)?
  * {unit} is a reference to all units. Output: (day|week|month|...)
  * {unit3} is a reference to a specific unit. Output: (hour)
  * {unit3-5} is a reference to a subset of the units array. Output: (hour|day|week)
@@ -282,7 +421,7 @@ Date.addLocale('it', {
   'weekdays': 'Domenica,Luned:ì|i,Marted:ì|i,Mercoled:ì|i,Gioved:ì|i,Venerd:ì|i,Sabato',
   'units': 'millisecond:o|i,second:o|i,minut:o|i,or:a|e,giorn:o|i,settiman:a|e,mes:e|i,ann:o|i',
   'numbers': "un:|a|o|',due,tre,quattro,cinque,sei,sette,otto,nove,dieci",
-  'optionals': "l'|la|il",
+  'tokens': "l'|la|il",
   'short':'{d} {Month} {yyyy}',
   'long': '{d} {Month} {yyyy} {H}:{mm}',
   'full': '{Weekday} {d} {Month} {yyyy} {H}:{mm}:{ss}',
@@ -303,8 +442,8 @@ Date.addLocale('it', {
   ],
   'dateParse': [
     '{num} {unit} {sign}',
-    '{0} {unit=5-7} {shift}',
-    '{0} {shift} {unit=5-7}'
+    '{0?} {unit=5-7} {shift}',
+    '{0?} {shift} {unit=5-7}'
   ],
   'timeParse': [
     '{weekday?} {date?} {month} {year?}',
@@ -325,7 +464,7 @@ Date.addLocale('it', {
  * locale.addFormat adds a date format (see this file for examples).
  * Special tokens in the date format will be parsed out into regex tokens:
  *
- * {0} is a reference to an entry in locale.optionals. Output: (?:the)?
+ * {0} is a reference to an entry in locale.tokens. Output: (?:the)?
  * {unit} is a reference to all units. Output: (day|week|month|...)
  * {unit3} is a reference to a specific unit. Output: (hour)
  * {unit3-5} is a reference to a subset of the units array. Output: (hour|day|week)
@@ -401,7 +540,7 @@ Date.addLocale('ja', {
  * locale.addFormat adds a date format (see this file for examples).
  * Special tokens in the date format will be parsed out into regex tokens:
  *
- * {0} is a reference to an entry in locale.optionals. Output: (?:the)?
+ * {0} is a reference to an entry in locale.tokens. Output: (?:the)?
  * {unit} is a reference to all units. Output: (day|week|month|...)
  * {unit3} is a reference to a specific unit. Output: (hour)
  * {unit3-5} is a reference to a subset of the units array. Output: (hour|day|week)
@@ -468,6 +607,82 @@ Date.addLocale('ko', {
   ]
 });
 
+/*
+ *
+ * Date.addLocale(<code>) adds this locale to Sugar.
+ * To set the locale globally, simply call:
+ *
+ * Date.setLocale('nl');
+ *
+ * var locale = Date.getLocale(<code>) will return this object, which
+ * can be tweaked to change the behavior of parsing/formatting in the locales.
+ *
+ * locale.addFormat adds a date format (see this file for examples).
+ * Special tokens in the date format will be parsed out into regex tokens:
+ *
+ * {0} is a reference to an entry in locale.tokens. Output: (?:the)?
+ * {unit} is a reference to all units. Output: (day|week|month|...)
+ * {unit3} is a reference to a specific unit. Output: (hour)
+ * {unit3-5} is a reference to a subset of the units array. Output: (hour|day|week)
+ * {unit?} "?" makes that token optional. Output: (day|week|month)?
+ *
+ * {day} Any reference to tokens in the modifiers array will include all with the same name. Output: (yesterday|today|tomorrow)
+ *
+ * All spaces are optional and will be converted to "\s*"
+ *
+ * Locale arrays months, weekdays, units, numbers, as well as the "src" field for
+ * all entries in the modifiers array follow a special format indicated by a colon:
+ *
+ * minute:|s  = minute|minutes
+ * thicke:n|r = thicken|thicker
+ *
+ * Additionally in the months, weekdays, units, and numbers array these will be added at indexes that are multiples
+ * of the relevant number for retrieval. For example having "sunday:|s" in the units array will result in:
+ *
+ * units: ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sundays']
+ *
+ * When matched, the index will be found using:
+ *
+ * units.indexOf(match) % 7;
+ *
+ * Resulting in the correct index with any number of alternates for that entry.
+ *
+ */
+
+Date.addLocale('nl', {
+  'plural': true,
+  'months': 'januari,februari,maart,april,mei,juni,juli,augustus,september,oktober,november,december',
+  'weekdays': 'zondag|zo,maandag|ma,dinsdag|di,woensdag|woe|wo,donderdag|do,vrijdag|vrij|vr,zaterdag|za',
+  'units': 'milliseconde:|n,seconde:|n,minu:ut|ten,uur,dag:|en,we:ek|ken,maand:|en,jaar',
+  'numbers': 'een,twee,drie,vier,vijf,zes,zeven,acht,negen',
+  'tokens': '',
+  'short':'{d} {Month} {yyyy}',
+  'long': '{d} {Month} {yyyy} {H}:{mm}',
+  'full': '{Weekday} {d} {Month} {yyyy} {H}:{mm}:{ss}',
+  'past': '{num} {unit} {sign}',
+  'future': '{num} {unit} {sign}',
+  'duration': '{num} {unit}',
+  'timeMarker': "'s|om",
+  'modifiers': [
+    { 'name': 'day', 'src': 'gisteren', 'value': -1 },
+    { 'name': 'day', 'src': 'vandaag', 'value': 0 },
+    { 'name': 'day', 'src': 'morgen', 'value': 1 },
+    { 'name': 'day', 'src': 'overmorgen', 'value': 2 },
+    { 'name': 'sign', 'src': 'geleden', 'value': -1 },
+    { 'name': 'sign', 'src': 'vanaf nu', 'value': 1 },
+    { 'name': 'shift', 'src': 'laatste|vorige|afgelopen', 'value': -1 },
+    { 'name': 'shift', 'src': 'volgend:|e', 'value': 1 }
+  ],
+  'dateParse': [
+    '{num} {unit} {sign}',
+    '{0?} {unit=5-7} {shift}',
+    '{0?} {shift} {unit=5-7}'
+  ],
+  'timeParse': [
+    '{weekday?} {date?} {month} {year?}',
+    '{shift} {weekday}'
+  ]
+});
 /*
  *
  * Date.addLocale(<code>) adds this locale to Sugar.
@@ -562,7 +777,7 @@ Date.addLocale('pl', {
  * locale.addFormat adds a date format (see this file for examples).
  * Special tokens in the date format will be parsed out into regex tokens:
  *
- * {0} is a reference to an entry in locale.optionals. Output: (?:the)?
+ * {0} is a reference to an entry in locale.tokens. Output: (?:the)?
  * {unit} is a reference to all units. Output: (day|week|month|...)
  * {unit3} is a reference to a specific unit. Output: (hour)
  * {unit3-5} is a reference to a subset of the units array. Output: (hour|day|week)
@@ -597,7 +812,7 @@ Date.addLocale('pt', {
   'weekdays': 'domingo,segunda-feira,terça-feira,quarta-feira,quinta-feira,sexta-feira,sábado|sabado',
   'units': 'milisegundo:|s,segundo:|s,minuto:|s,hora:|s,dia:|s,semana:|s,mês|mêses|mes|meses,ano:|s',
   'numbers': 'um,dois,três|tres,quatro,cinco,seis,sete,oito,nove,dez,uma,duas',
-  'optionals': 'a,de',
+  'tokens': 'a,de',
   'short':'{d} de {month} de {yyyy}',
   'long': '{d} de {month} de {yyyy} {H}:{mm}',
   'full': '{Weekday}, {d} de {month} de {yyyy} {H}:{mm}:{ss}',
@@ -619,12 +834,12 @@ Date.addLocale('pt', {
   'dateParse': [
     '{num} {unit} {sign}',
     '{sign} {num} {unit}',
-    '{0} {unit=5-7} {shift}',
-    '{0} {shift} {unit=5-7}'
+    '{0?} {unit=5-7} {shift}',
+    '{0?} {shift} {unit=5-7}'
   ],
   'timeParse': [
-    '{date?} {1} {month} {1} {year?}',
-    '{0} {shift} {weekday}'
+    '{date?} {1?} {month} {1?} {year?}',
+    '{0?} {shift} {weekday}'
   ]
 });
 
@@ -641,7 +856,7 @@ Date.addLocale('pt', {
  * locale.addFormat adds a date format (see this file for examples).
  * Special tokens in the date format will be parsed out into regex tokens:
  *
- * {0} is a reference to an entry in locale.optionals. Output: (?:the)?
+ * {0} is a reference to an entry in locale.tokens. Output: (?:the)?
  * {unit} is a reference to all units. Output: (day|week|month|...)
  * {unit3} is a reference to a specific unit. Output: (hour)
  * {unit3-5} is a reference to a subset of the units array. Output: (hour|day|week)
@@ -675,13 +890,25 @@ Date.addLocale('ru', {
   'weekdays': 'Воскресенье,Понедельник,Вторник,Среда,Четверг,Пятница,Суббота',
   'units': 'миллисекунд:а|у|ы|,секунд:а|у|ы|,минут:а|у|ы|,час:||а|ов,день|день|дня|дней,недел:я|ю|и|ь|е,месяц:||а|ев|е,год|год|года|лет|году',
   'numbers': 'од:ин|ну,дв:а|е,три,четыре,пять,шесть,семь,восемь,девять,десять',
-  'optionals': 'в|на,года',
+  'tokens': 'в|на,года',
   'short':'{d} {month} {yyyy} года',
   'long': '{d} {month} {yyyy} года {H}:{mm}',
   'full': '{Weekday} {d} {month} {yyyy} года {H}:{mm}:{ss}',
-  'past': '{num} {unit} {sign}',
-  'future': '{sign} {num} {unit}',
-  'duration': '{num} {unit}',
+  'relative': function(num, unit, ms, format) {
+    var numberWithUnit, last = num.toString().slice(-1);
+    switch(true) {
+      case num >= 11 && num <= 15: mult = 3; break;
+      case last == 1: mult = 1; break;
+      case last >= 2 && last <= 4: mult = 2; break;
+      default: mult = 3;
+    }
+    numberWithUnit = num + ' ' + this['units'][(mult * 8) + unit];
+    switch(format) {
+      case 'duration':  return numberWithUnit;
+      case 'past':      return numberWithUnit + ' назад';
+      case 'future':    return 'через ' + numberWithUnit;
+    }
+  },
   'timeMarker': 'в',
   'ampm': ' утра, вечера',
   'modifiers': [
@@ -699,11 +926,11 @@ Date.addLocale('ru', {
     '{num} {unit} {sign}',
     '{sign} {num} {unit}',
     '{month} {year}',
-    '{0} {shift} {unit=5-7}'
+    '{0?} {shift} {unit=5-7}'
   ],
   'timeParse': [
-    '{date} {month} {year?} {1}',
-    '{0} {shift} {weekday}'
+    '{date} {month} {year?} {1?}',
+    '{0?} {shift} {weekday}'
   ]
 });
 
@@ -720,7 +947,7 @@ Date.addLocale('ru', {
  * locale.addFormat adds a date format (see this file for examples).
  * Special tokens in the date format will be parsed out into regex tokens:
  *
- * {0} is a reference to an entry in locale.optionals. Output: (?:the)?
+ * {0} is a reference to an entry in locale.tokens. Output: (?:the)?
  * {unit} is a reference to all units. Output: (day|week|month|...)
  * {unit3} is a reference to a specific unit. Output: (hour)
  * {unit3-5} is a reference to a subset of the units array. Output: (hour|day|week)
@@ -755,7 +982,7 @@ Date.addLocale('sv', {
   'weekdays': 'söndag|sondag,måndag:|en+mandag:|en,tisdag,onsdag,torsdag,fredag,lördag|lordag',
   'units': 'millisekund:|er,sekund:|er,minut:|er,timm:e|ar,dag:|ar,veck:a|or|an,månad:|er|en+manad:|er|en,år:||et+ar:||et',
   'numbers': 'en|ett,två|tva,tre,fyra,fem,sex,sju,åtta|atta,nio,tio',
-  'optionals': 'den,för|for',
+  'tokens': 'den,för|for',
   'articles': 'den',
   'short':'den {d} {month} {yyyy}',
   'long': 'den {d} {month} {yyyy} {H}:{mm}',
@@ -779,11 +1006,11 @@ Date.addLocale('sv', {
   'dateParse': [
     '{num} {unit} {sign}',
     '{sign} {num} {unit}',
-    '{1} {num} {unit} {sign}',
-    '{shift} {unit5-7}'
+    '{1?} {num} {unit} {sign}',
+    '{shift} {unit=5-7}'
   ],
   'timeParse': [
-    '{0} {weekday?} {date?} {month} {year}',
+    '{0?} {weekday?} {date?} {month} {year}',
     '{date} {month}',
     '{shift} {weekday}'
   ]
@@ -802,7 +1029,7 @@ Date.addLocale('sv', {
  * locale.addFormat adds a date format (see this file for examples).
  * Special tokens in the date format will be parsed out into regex tokens:
  *
- * {0} is a reference to an entry in locale.optionals. Output: (?:the)?
+ * {0} is a reference to an entry in locale.tokens. Output: (?:the)?
  * {unit} is a reference to all units. Output: (day|week|month|...)
  * {unit3} is a reference to a specific unit. Output: (hour)
  * {unit3-5} is a reference to a subset of the units array. Output: (hour|day|week)
@@ -836,7 +1063,7 @@ Date.addLocale('zh-CN', {
   'monthSuffix': '月',
   'weekdays': '星期日|周日,星期一|周一,星期二|周二,星期三|周三,星期四|周四,星期五|周五,星期六|周六',
   'units': '毫秒,秒钟,分钟,小时,天,个星期|周,个月,年',
-  'optionals': '日|号',
+  'tokens': '日|号',
   'short':'{yyyy}年{M}月{d}日',
   'long': '{yyyy}年{M}月{d}日 {tt}{h}:{mm}',
   'full': '{yyyy}年{M}月{d}日 {weekday} {tt}{h}:{mm}:{ss}',
@@ -863,9 +1090,9 @@ Date.addLocale('zh-CN', {
   ],
   'timeParse': [
     '{shift}{weekday}',
-    '{year}年{month?}月?{date?}{0}',
-    '{month}月{date?}{0}',
-    '{date}{0}'
+    '{year}年{month?}月?{date?}{0?}',
+    '{month}月{date?}{0?}',
+    '{date}[日号]'
   ]
 });
 
@@ -882,7 +1109,7 @@ Date.addLocale('zh-CN', {
  * locale.addFormat adds a date format (see this file for examples).
  * Special tokens in the date format will be parsed out into regex tokens:
  *
- * {0} is a reference to an entry in locale.optionals. Output: (?:the)?
+ * {0} is a reference to an entry in locale.tokens. Output: (?:the)?
  * {unit} is a reference to all units. Output: (day|week|month|...)
  * {unit3} is a reference to a specific unit. Output: (hour)
  * {unit3-5} is a reference to a subset of the units array. Output: (hour|day|week)
@@ -917,7 +1144,7 @@ Date.addLocale('zh-TW', {
   'monthSuffix': '月',
   'weekdays': '星期日|週日,星期一|週一,星期二|週二,星期三|週三,星期四|週四,星期五|週五,星期六|週六',
   'units': '毫秒,秒鐘,分鐘,小時,天,個星期|週,個月,年',
-  'optionals': '日|號',
+  'tokens': '日|號',
   'short':'{yyyy}年{M}月{d}日',
   'long': '{yyyy}年{M}月{d}日 {tt}{h}:{mm}',
   'full': '{yyyy}年{M}月{d}日 {Weekday} {tt}{h}:{mm}:{ss}',
@@ -944,9 +1171,9 @@ Date.addLocale('zh-TW', {
   ],
   'timeParse': [
     '{shift}{weekday}',
-    '{year}年{month?}月?{date?}{0}',
-    '{month}月{date?}{0}',
-    '{date}{0}'
+    '{year}年{month?}月?{date?}{0?}',
+    '{month}月{date?}{0?}',
+    '{date}[日號]'
   ]
 });
 

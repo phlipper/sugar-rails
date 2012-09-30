@@ -90,6 +90,7 @@
     {
       token: '[Tt]{1,2}',
       format: function(d, loc, n, format) {
+        if(loc['ampm'].length == 0) return '';
         var hours = callDateGet(d, 'Hours');
         var str = loc['ampm'][floor(hours / 12)];
         if(format.length === 1) str = str.slice(0,1);
@@ -246,7 +247,7 @@
       return English['units'][this['units'].indexOf(n) % 8];
     },
 
-    relative: function(adu) {
+    getRelativeFormat: function(adu) {
       return this.convertAdjustedToFormat(adu, adu[2] > 0 ? 'future' : 'past');
     },
 
@@ -264,25 +265,23 @@
     },
 
     matchPM: function(str) {
-      return str === this['ampm'][1];
+      return str && str === this['ampm'][1];
     },
 
-    convertAdjustedToFormat: function(adu, format) {
-      var num = adu[0], u = adu[1], ms = adu[2], sign, unit, last, mult;
-      if(this['code'] == 'ru') {
-        last = num.toString().slice(-1);
-        switch(true) {
-          case last == 1: mult = 1; break;
-          case last >= 2 && last <= 4: mult = 2; break;
-          default: mult = 3;
-        }
-      } else {
-        mult = this['plural'] && num > 1 ? 1 : 0;
+    convertAdjustedToFormat: function(adu, mode) {
+      var sign, unit, mult,
+          num    = adu[0],
+          u      = adu[1],
+          ms     = adu[2],
+          format = this[mode] || this['relative'];
+      if(isFunction(format)) {
+        return format.call(this, num, u, ms, mode);
       }
+      mult = this['plural'] && num > 1 ? 1 : 0;
       unit = this['units'][mult * 8 + u] || this['units'][u];
       if(this['capitalizeUnit']) unit = simpleCapitalize(unit);
       sign = this['modifiers'].filter(function(m) { return m.name == 'sign' && m.value == (ms > 0 ? 1 : -1); })[0];
-      return this[format].replace(/\{(.*?)\}/g, function(full, match) {
+      return format.replace(/\{(.*?)\}/g, function(full, match) {
         switch(match) {
           case 'num': return num;
           case 'unit': return unit;
@@ -300,9 +299,13 @@
 
       src = src.replace(/\s+/g, '[-,. ]*');
       src = src.replace(/\{([^,]+?)\}/g, function(all, k) {
-        var opt = k.match(/\?$/), slice = k.match(/(\d)(?:-(\d))?/), nc = k.match(/^\d+$/), key = k.replace(/[^a-z]+$/, ''), value, arr;
+        var value, arr, result,
+            opt   = k.match(/\?$/),
+            nc    = k.match(/^(\d+)\??$/),
+            slice = k.match(/(\d)(?:-(\d))?/),
+            key   = k.replace(/[^a-z]+$/, '');
         if(nc) {
-          value = loc['optionals'][nc[0]];
+          value = loc['tokens'][nc[1]];
         } else if(loc[key]) {
           value = loc[key];
         } else if(loc[key + 's']) {
@@ -322,13 +325,17 @@
           value = arrayToAlternates(value);
         }
         if(nc) {
-          return '(?:' + value + ')?';
+          result = '(?:' + value + ')';
         } else {
           if(!match) {
             to.push(key);
           }
-          return '(' + value + ')' + (opt ? '?' : '');
+          result = '(' + value + ')';
         }
+        if(opt) {
+          result += '?';
+        }
+        return result;
       });
       if(allowsTime) {
         time = prepareTime(RequiredTime, loc, iso);
@@ -423,7 +430,7 @@
     // Initialize the locale
     loc = new Localization(set);
     initializeField('modifiers');
-    'months,weekdays,units,numbers,articles,optionals,timeMarker,ampm,timeSuffixes,dateParse,timeParse'.split(',').forEach(initializeField);
+    'months,weekdays,units,numbers,articles,tokens,timeMarker,ampm,timeSuffixes,dateParse,timeParse'.split(',').forEach(initializeField);
 
     canAbbreviate = !loc['monthSuffix'];
 
@@ -571,7 +578,7 @@
     d.utc(forceUTC);
 
     if(isDate(f)) {
-      d = f.clone();
+      d = new date(f.getTime());
     } else if(isNumber(f)) {
       d = new date(f);
     } else if(isObject(f)) {
@@ -824,7 +831,7 @@
         adu[1] = 1;
         adu[0] = 1;
       }
-      return loc.relative(adu);
+      return loc.getRelativeFormat(adu);
     }
 
     format = format || 'long';
@@ -891,6 +898,10 @@
       return isDefined(getParam(key));
     }
 
+    function uniqueParamExists(key, isDay) {
+      return paramExists(key) || (isDay && paramExists('weekday'));
+    }
+
     function canDisambiguate() {
       var now = new date;
       return (prefer === -1 && d > now) || (prefer === 1 && d < now);
@@ -915,7 +926,7 @@
     // as setting hour: 3, minute: 345, etc.
     iterateOverObject(DateUnitsReversed, function(i,u) {
       var isDay = u.unit === 'day';
-      if(paramExists(u.unit) || (isDay && paramExists('weekday'))) {
+      if(uniqueParamExists(u.unit, isDay)) {
         params.specificity = u.unit;
         specificityIndex = +i;
         return false;
@@ -924,6 +935,7 @@
         callDateSet(d, u.method, (isDay ? 1 : 0));
       }
     });
+
 
     // Now actually set or advance the date in order, higher units first.
     DateUnits.forEach(function(u,i) {
@@ -959,6 +971,7 @@
       }
     });
 
+
     // If a weekday is included in the params, set it ahead of time and set the params
     // to reflect the updated date so that resetting works properly.
     if(!advance && !paramExists('day') && paramExists('weekday')) {
@@ -969,7 +982,7 @@
     if(canDisambiguate()) {
       iterateOverObject(DateUnitsReversed.slice(specificityIndex + 1), function(i,u) {
         var ambiguous = u.ambiguous || (u.unit === 'week' && paramExists('weekday'));
-        if(ambiguous && !paramExists(u.unit)) {
+        if(ambiguous && !uniqueParamExists(u.unit, u.unit === 'day')) {
           d[u.addMethod](prefer);
           return false;
         }
@@ -2139,7 +2152,7 @@
     'units':      'millisecond:|s,second:|s,minute:|s,hour:|s,day:|s,week:|s,month:|s,year:|s',
     'numbers':    'one,two,three,four,five,six,seven,eight,nine,ten',
     'articles':   'a,an,the',
-    'optionals':  'the,st|nd|rd|th,of',
+    'tokens':  'the,st|nd|rd|th,of',
     'short':      '{Month} {d}, {yyyy}',
     'long':       '{Month} {d}, {yyyy} {h}:{mm}{tt}',
     'full':       '{Weekday} {Month} {d}, {yyyy} {h}:{mm}:{ss}{tt}',
@@ -2151,7 +2164,7 @@
       { 'name': 'day',   'src': 'today', 'value': 0 },
       { 'name': 'day',   'src': 'tomorrow', 'value': 1 },
       { 'name': 'sign',  'src': 'ago|before', 'value': -1 },
-      { 'name': 'sign',  'src': 'from now|after|from|in', 'value': 1 },
+      { 'name': 'sign',  'src': 'from now|after|from|in|later', 'value': 1 },
       { 'name': 'edge',  'src': 'last day', 'value': -2 },
       { 'name': 'edge',  'src': 'end', 'value': -1 },
       { 'name': 'edge',  'src': 'first day|beginning', 'value': 1 },
@@ -2162,20 +2175,21 @@
     'dateParse': [
       '{num} {unit} {sign}',
       '{sign} {num} {unit}',
-      '{num} {unit=4-5} {sign} {day}',
       '{month} {year}',
       '{shift} {unit=5-7}',
-      '{0} {edge} of {shift?} {unit=4-7?}{month?}{year?}'
+      '{0?} {date}{1}',
+      '{0?} {edge} of {shift?} {unit=4-7?}{month?}{year?}'
     ],
     'timeParse': [
       '{0} {num}{1} {day} of {month} {year?}',
-      '{weekday?} {month} {date}{1} {year?}',
+      '{weekday?} {month} {date}{1?} {year?}',
       '{date} {month} {year}',
       '{shift} {weekday}',
       '{shift} week {weekday}',
-      '{weekday} {2} {shift} week',
-      '{0} {date}{1} of {month}',
-      '{0}{month?} {date?}{1} of {shift} {unit=6-7}'
+      '{weekday} {2?} {shift} week',
+      '{num} {unit=4-5} {sign} {day}',
+      '{0?} {date}{1} of {month}',
+      '{0?}{month?} {date?}{1?} of {shift} {unit=6-7}'
     ]
   });
 
