@@ -10,8 +10,10 @@
   var CurrentLocalization;
 
   var TimeFormat = ['ampm','hour','minute','second','ampm','utc','offset_sign','offset_hours','offset_minutes','ampm']
-  var FloatReg = '\\d{1,2}(?:[,.]\\d+)?';
-  var RequiredTime = '({t})?\\s*('+FloatReg+')(?:{h}('+FloatReg+')?{m}(?::?('+FloatReg+'){s})?\\s*(?:({t})|(Z)|(?:([+-])(\\d{2,2})(?::?(\\d{2,2}))?)?)?|\\s*({t}))';
+  var DecimalReg = '(?:[,.]\\d+)?';
+  var HoursReg   = '\\d{1,2}' + DecimalReg;
+  var SixtyReg   = '[0-5]\\d' + DecimalReg;
+  var RequiredTime = '({t})?\\s*('+HoursReg+')(?:{h}('+SixtyReg+')?{m}(?::?('+SixtyReg+'){s})?\\s*(?:({t})|(Z)|(?:([+-])(\\d{2,2})(?::?(\\d{2,2}))?)?)?|\\s*({t}))';
 
   var KanjiDigits     = '〇一二三四五六七八九十百千万';
   var FullWidthDigits = '０１２３４５６７８９';
@@ -411,6 +413,10 @@
       return arrayToAlternates(arr);
     }
 
+    function setDefault(name, value) {
+      loc[name] = loc[name] || value;
+    }
+
     function setModifiers() {
       var arr = [];
       loc.modifiersByName = {};
@@ -439,10 +445,10 @@
     setArray('units', false, 8);
     setArray('numbers', false, 10);
 
-    loc['code'] = localeCode;
-    loc['date'] = getDigit(1,2, loc['digitDate']);
-    loc['year'] = getDigit(4,4);
-    loc['num']  = getNum();
+    setDefault('code', localeCode);
+    setDefault('date', getDigit(1,2, loc['digitDate']));
+    setDefault('year', "'\\d{2}|" + getDigit(4,4));
+    setDefault('num', getNum());
 
     setModifiers();
 
@@ -537,8 +543,10 @@
     arr.forEach(function(key, i) {
       value = match[i + 1];
       if(isUndefined(value) || value === '') return;
-      if(key === 'year') obj.yearAsString = value;
-      num = parseFloat(value.replace(/,/, '.'));
+      if(key === 'year') {
+        obj.yearAsString = value.replace(/'/, '');
+      }
+      num = parseFloat(value.replace(/'/, '').replace(/,/, '.'));
       obj[key] = !isNaN(num) ? num : value.toLowerCase();
     });
     return obj;
@@ -855,7 +863,8 @@
   // Date comparison helpers
 
   function compareDate(d, find, buffer, forceUTC) {
-    var p = getExtendedDate(find, null, null, forceUTC), accuracy = 0, loBuffer = 0, hiBuffer = 0, override, capitalized;
+    var p, t, min, max, minOffset, maxOffset, override, capitalized, accuracy = 0, loBuffer = 0, hiBuffer = 0;
+    p = getExtendedDate(find, null, null, forceUTC);
     if(buffer > 0) {
       loBuffer = hiBuffer = buffer;
       override = true;
@@ -881,10 +890,25 @@
         hiBuffer = -50;
       }
     }
-    var t   = d.getTime();
-    var min = p.date.getTime();
-    var max = max || (min + accuracy);
+    t   = d.getTime();
+    min = p.date.getTime();
+    max = max || (min + accuracy);
+    max = compensateForTimezoneTraversal(d, min, max);
     return t >= (min - loBuffer) && t <= (max + hiBuffer);
+  }
+
+  function compensateForTimezoneTraversal(d, min, max) {
+    var dMin, dMax, minOffset, maxOffset;
+    dMin = new Date(min);
+    dMax = new Date(max).utc(d.isUTC());
+    if(callDateGet(dMax, 'Hours') !== 23) {
+      minOffset = dMin.getTimezoneOffset();
+      maxOffset = dMax.getTimezoneOffset();
+      if(minOffset !== maxOffset) {
+        max += (maxOffset - minOffset).minutes();
+      }
+    }
+    return max;
   }
 
   function updateDate(d, params, reset, advance, prefer) {
@@ -917,7 +941,9 @@
     }
 
     // "date" can also be passed for the day
-    if(params['date']) params['day'] = params['date'];
+    if(isDefined(params['date'])) {
+      params['day'] = params['date'];
+    }
 
     // Reset any unit lower than the least specific unit set. Do not do this for weeks
     // or for years. This needs to be performed before the acutal setting of the date
@@ -1030,7 +1056,9 @@
   // (or 29th in the case of a leap year).
 
   function checkMonthTraversal(date, targetMonth) {
-    if(targetMonth < 0) targetMonth += 12;
+    if(targetMonth < 0) {
+      targetMonth = targetMonth % 12 + 12;
+    }
     if(targetMonth % 12 != callDateGet(date, 'Month')) {
       callDateSet(date, 'Date', 0);
     }
@@ -2152,7 +2180,7 @@
     'units':      'millisecond:|s,second:|s,minute:|s,hour:|s,day:|s,week:|s,month:|s,year:|s',
     'numbers':    'one,two,three,four,five,six,seven,eight,nine,ten',
     'articles':   'a,an,the',
-    'tokens':  'the,st|nd|rd|th,of',
+    'tokens':     'the,st|nd|rd|th,of',
     'short':      '{Month} {d}, {yyyy}',
     'long':       '{Month} {d}, {yyyy} {h}:{mm}{tt}',
     'full':       '{Weekday} {Month} {d}, {yyyy} {h}:{mm}:{ss}{tt}',
@@ -2184,6 +2212,7 @@
       '{0} {num}{1} {day} of {month} {year?}',
       '{weekday?} {month} {date}{1?} {year?}',
       '{date} {month} {year}',
+      '{date} {month}',
       '{shift} {weekday}',
       '{shift} week {weekday}',
       '{weekday} {2?} {shift} week',

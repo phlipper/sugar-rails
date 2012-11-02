@@ -1,5 +1,5 @@
 /*
- *  Sugar Library v1.3.5
+ *  Sugar Library v1.3.6
  *
  *  Freely distributable and licensed under the MIT-style license.
  *  Copyright (c) 2012 Andrew Plummer
@@ -128,6 +128,12 @@
     return result;
   }
 
+  function checkCallback(fn) {
+    if(!fn || !fn.call) {
+      throw new TypeError('Callback is not callable');
+    }
+  }
+
 
   // General helpers
 
@@ -162,7 +168,7 @@
     var key;
     for(key in obj) {
       if(!hasOwnProperty(obj, key)) continue;
-      if(fn.call(obj, key, obj[key]) === false) break;
+      if(fn.call(obj, key, obj[key], obj) === false) break;
     }
   }
 
@@ -444,12 +450,6 @@
       return d;
     } else {
       return parseInt(i >> 0);
-    }
-  }
-
-  function checkCallback(fn) {
-    if(!fn || !fn.call) {
-      throw new TypeError('Callback is not callable');
     }
   }
 
@@ -860,7 +860,7 @@
     } else if(isRegExp(match) && isString(el)) {
       // Match against a regexp
       return regexp(match).test(el);
-    } else if(isFunction(match) && !isFunction(el)) {
+    } else if(isFunction(match)) {
       // Match against a filtering function
       return match.apply(scope, params);
     } else if(isObject(match) && isObjectPrimitive(el)) {
@@ -1161,10 +1161,12 @@
       var result = [], tmp;
       multiArgs(arguments, function(a) {
         if(isObjectPrimitive(a)) {
-          tmp = array.prototype.slice.call(a);
-          if(tmp.length > 0) {
-            a = tmp;
-          }
+          try {
+            tmp = array.prototype.slice.call(a, 0);
+            if(tmp.length > 0) {
+              a = tmp;
+            }
+          } catch(e) {}
         }
         result = result.concat(a);
       });
@@ -1749,15 +1751,8 @@
      *
      ***/
     'sample': function(num) {
-      var result = [], arr = this.clone(), index;
-      if(isUndefined(num)) num = 1;
-      while(result.length < num) {
-        index = floor(math.random() * (arr.length - 1));
-        result.push(arr[index]);
-        arr.removeAt(index);
-        if(arr.length == 0) break;
-      }
-      return arguments.length > 0 ? result : result[0];
+      var arr = this.randomize();
+      return arguments.length > 0 ? arr.slice(0, num) : arr[0];
     },
 
     /***
@@ -1946,6 +1941,7 @@
    * @extra In cases where a callback is used, instead of %element, index%, the callback will instead be passed %key, value%. Enumerable methods are also available to extended objects as instance methods.
    *
    * @set
+   *   each
    *   map
    *   any
    *   all
@@ -1975,7 +1971,8 @@
     extendSimilar(object, false, false, names, function(methods, name) {
       methods[name] = function(obj, arg1, arg2) {
         var result;
-        result = array.prototype[name].call(keysWithCoercion(obj), function(key) {
+        var x =  keysWithCoercion(obj);
+        result = array.prototype[name].call(x, function(key) {
           if(mapping) {
             return transformArgument(obj[key], arg1, obj, [key, obj[key], obj]);
           } else {
@@ -2012,6 +2009,12 @@
       return values.reduce.apply(values, multiArgs(arguments).slice(1));
     },
 
+    'each': function(obj, fn) {
+      checkCallback(fn);
+      iterateOverObject(obj, fn);
+      return obj;
+    },
+
     /***
      * @method size(<obj>)
      * @returns Number
@@ -2030,7 +2033,7 @@
 
   buildEnhancements();
   buildAlphanumericSort();
-  buildEnumerableMethods('each,any,all,none,count,find,findAll,isEmpty');
+  buildEnumerableMethods('any,all,none,count,find,findAll,isEmpty');
   buildEnumerableMethods('sum,average,min,max,least,most', true);
   buildObjectInstanceMethods('map,reduce,size', Hash);
 
@@ -2046,8 +2049,10 @@
   var CurrentLocalization;
 
   var TimeFormat = ['ampm','hour','minute','second','ampm','utc','offset_sign','offset_hours','offset_minutes','ampm']
-  var FloatReg = '\\d{1,2}(?:[,.]\\d+)?';
-  var RequiredTime = '({t})?\\s*('+FloatReg+')(?:{h}('+FloatReg+')?{m}(?::?('+FloatReg+'){s})?\\s*(?:({t})|(Z)|(?:([+-])(\\d{2,2})(?::?(\\d{2,2}))?)?)?|\\s*({t}))';
+  var DecimalReg = '(?:[,.]\\d+)?';
+  var HoursReg   = '\\d{1,2}' + DecimalReg;
+  var SixtyReg   = '[0-5]\\d' + DecimalReg;
+  var RequiredTime = '({t})?\\s*('+HoursReg+')(?:{h}('+SixtyReg+')?{m}(?::?('+SixtyReg+'){s})?\\s*(?:({t})|(Z)|(?:([+-])(\\d{2,2})(?::?(\\d{2,2}))?)?)?|\\s*({t}))';
 
   var KanjiDigits     = '〇一二三四五六七八九十百千万';
   var FullWidthDigits = '０１２３４５６７８９';
@@ -2447,6 +2452,10 @@
       return arrayToAlternates(arr);
     }
 
+    function setDefault(name, value) {
+      loc[name] = loc[name] || value;
+    }
+
     function setModifiers() {
       var arr = [];
       loc.modifiersByName = {};
@@ -2475,10 +2484,10 @@
     setArray('units', false, 8);
     setArray('numbers', false, 10);
 
-    loc['code'] = localeCode;
-    loc['date'] = getDigit(1,2, loc['digitDate']);
-    loc['year'] = getDigit(4,4);
-    loc['num']  = getNum();
+    setDefault('code', localeCode);
+    setDefault('date', getDigit(1,2, loc['digitDate']));
+    setDefault('year', "'\\d{2}|" + getDigit(4,4));
+    setDefault('num', getNum());
 
     setModifiers();
 
@@ -2573,8 +2582,10 @@
     arr.forEach(function(key, i) {
       value = match[i + 1];
       if(isUndefined(value) || value === '') return;
-      if(key === 'year') obj.yearAsString = value;
-      num = parseFloat(value.replace(/,/, '.'));
+      if(key === 'year') {
+        obj.yearAsString = value.replace(/'/, '');
+      }
+      num = parseFloat(value.replace(/'/, '').replace(/,/, '.'));
       obj[key] = !isNaN(num) ? num : value.toLowerCase();
     });
     return obj;
@@ -2891,7 +2902,8 @@
   // Date comparison helpers
 
   function compareDate(d, find, buffer, forceUTC) {
-    var p = getExtendedDate(find, null, null, forceUTC), accuracy = 0, loBuffer = 0, hiBuffer = 0, override, capitalized;
+    var p, t, min, max, minOffset, maxOffset, override, capitalized, accuracy = 0, loBuffer = 0, hiBuffer = 0;
+    p = getExtendedDate(find, null, null, forceUTC);
     if(buffer > 0) {
       loBuffer = hiBuffer = buffer;
       override = true;
@@ -2917,10 +2929,25 @@
         hiBuffer = -50;
       }
     }
-    var t   = d.getTime();
-    var min = p.date.getTime();
-    var max = max || (min + accuracy);
+    t   = d.getTime();
+    min = p.date.getTime();
+    max = max || (min + accuracy);
+    max = compensateForTimezoneTraversal(d, min, max);
     return t >= (min - loBuffer) && t <= (max + hiBuffer);
+  }
+
+  function compensateForTimezoneTraversal(d, min, max) {
+    var dMin, dMax, minOffset, maxOffset;
+    dMin = new Date(min);
+    dMax = new Date(max).utc(d.isUTC());
+    if(callDateGet(dMax, 'Hours') !== 23) {
+      minOffset = dMin.getTimezoneOffset();
+      maxOffset = dMax.getTimezoneOffset();
+      if(minOffset !== maxOffset) {
+        max += (maxOffset - minOffset).minutes();
+      }
+    }
+    return max;
   }
 
   function updateDate(d, params, reset, advance, prefer) {
@@ -2953,7 +2980,9 @@
     }
 
     // "date" can also be passed for the day
-    if(params['date']) params['day'] = params['date'];
+    if(isDefined(params['date'])) {
+      params['day'] = params['date'];
+    }
 
     // Reset any unit lower than the least specific unit set. Do not do this for weeks
     // or for years. This needs to be performed before the acutal setting of the date
@@ -3066,7 +3095,9 @@
   // (or 29th in the case of a leap year).
 
   function checkMonthTraversal(date, targetMonth) {
-    if(targetMonth < 0) targetMonth += 12;
+    if(targetMonth < 0) {
+      targetMonth = targetMonth % 12 + 12;
+    }
     if(targetMonth % 12 != callDateGet(date, 'Month')) {
       callDateSet(date, 'Date', 0);
     }
@@ -4188,7 +4219,7 @@
     'units':      'millisecond:|s,second:|s,minute:|s,hour:|s,day:|s,week:|s,month:|s,year:|s',
     'numbers':    'one,two,three,four,five,six,seven,eight,nine,ten',
     'articles':   'a,an,the',
-    'tokens':  'the,st|nd|rd|th,of',
+    'tokens':     'the,st|nd|rd|th,of',
     'short':      '{Month} {d}, {yyyy}',
     'long':       '{Month} {d}, {yyyy} {h}:{mm}{tt}',
     'full':       '{Weekday} {Month} {d}, {yyyy} {h}:{mm}:{ss}{tt}',
@@ -4220,6 +4251,7 @@
       '{0} {num}{1} {day} of {month} {year?}',
       '{weekday?} {month} {date}{1?} {year?}',
       '{date} {month} {year}',
+      '{date} {month}',
       '{shift} {weekday}',
       '{shift} week {weekday}',
       '{weekday} {2?} {shift} week',
@@ -4805,7 +4837,7 @@
      *
      ***/
     'isOdd': function() {
-      return !this.isMultipleOf(2);
+      return !isNaN(this) && !this.isMultipleOf(2);
     },
 
     /***
@@ -4853,21 +4885,27 @@
      *
      ***/
     'format': function(place, thousands, decimal) {
-      var str, split, method, after, r = /(\d+)(\d{3})/;
-      if(string(thousands).match(/\d/)) throw new TypeError('Thousands separator cannot contain numbers.');
-      str = isNumber(place) ? round(this, place || 0).toFixed(math.max(place, 0)) : this.toString();
-      thousands = thousands || ',';
-      decimal = decimal || '.';
-      split = str.split('.');
-      str = split[0];
-      after = split[1] || '';
-      while (str.match(r)) {
-        str = str.replace(r, '$1' + thousands + '$2');
+      var i, str, split, integer, fraction, result = '';
+      if(isUndefined(thousands)) {
+        thousands = ',';
       }
-      if(after.length > 0) {
-        str += decimal + repeatString((place || 0) - after.length, '0') + after;
+      if(isUndefined(decimal)) {
+        decimal = '.';
       }
-      return str;
+      str      = (isNumber(place) ? round(this, place || 0).toFixed(math.max(place, 0)) : this.toString()).replace(/^-/, '');
+      split    = str.split('.');
+      integer  = split[0];
+      fraction = split[1];
+      for(i = integer.length; i > 0; i -= 3) {
+        if(i < integer.length) {
+          result = thousands + result;
+        }
+        result = integer.slice(math.max(0, i - 3), i) + result;
+      }
+      if(fraction) {
+        result += decimal + repeatString((place || 0) - fraction.length, '0') + fraction;
+      }
+      return (this < 0 ? '-' : '') + result;
     },
 
     /***
@@ -5079,7 +5117,6 @@
 
   buildNumber();
 
-
   /***
    * @package Object
    * @dependency core
@@ -5109,7 +5146,7 @@
       });
       if(!key && paramIsArray) key = obj.length.toString();
       setParamsObject(obj, key, value);
-    } else if(value.match(/^[\d.]+$/)) {
+    } else if(value.match(/^[+-]?\d+(\.\d+)?$/)) {
       obj[param] = parseFloat(value);
     } else if(value === 'true') {
       obj[param] = true;
@@ -5389,7 +5426,9 @@
      * @example
      *
      *   Object.extend();
-     *   [2,4,6].map(Math.exp).tap(function(){ arr.pop(); }).map(Math.round); ->  [7,55]
+     *   [2,4,6].map(Math.exp).tap(function(arr) {
+     *     arr.pop()
+     *   });
      *   [2,4,6].map(Math.exp).tap('pop').map(Math.round); ->  [7,55]
      *
      ***/
@@ -5613,8 +5652,6 @@
     }
   }
 
-
-
   extend(string, true, false, {
 
      /***
@@ -5673,7 +5710,12 @@
       *
       ***/
     'escapeHTML': function() {
-      return this.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return this.replace(/&/g,  '&amp;' )
+                 .replace(/</g,  '&lt;'  )
+                 .replace(/>/g,  '&gt;'  )
+                 .replace(/"/g,  '&quot;')
+                 .replace(/'/g,  '&apos;')
+                 .replace(/\//g, '&#x2f;');
     },
 
      /***
@@ -5687,7 +5729,12 @@
       *
       ***/
     'unescapeHTML': function() {
-      return this.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+      return this.replace(/&amp;/g,  '&')
+                 .replace(/&lt;/g,   '<')
+                 .replace(/&gt;/g,   '>')
+                 .replace(/&quot;/g, '"')
+                 .replace(/&apos;/g, "'")
+                 .replace(/&#x2f;/g, '/');
     },
 
      /***
@@ -6274,17 +6321,21 @@
      *
      *   'jumpy'.repeat(2) -> 'jumpyjumpy'
      *   'a'.repeat(5)     -> 'aaaaa'
+     *   'a'.repeat(0)     -> ''
      *
      ***/
     'repeat': function(num) {
-      var str = '', i = 0;
-      if(isNumber(num) && num > 0) {
-        while(i < num) {
-          str += this;
-          i++;
+      var result = '', str = this;
+      if(!isNumber(num) || num < 1) return '';
+      while (num) {
+        if (num & 1) {
+          result += str;
+        }
+        if (num >>= 1) {
+          str += str;
         }
       }
-      return str;
+      return result;
     },
 
     /***
@@ -6372,7 +6423,6 @@
       });
       return context;
     }
-
   });
 
 

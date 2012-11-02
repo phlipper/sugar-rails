@@ -16,7 +16,7 @@
     } else if(isRegExp(match) && isString(el)) {
       // Match against a regexp
       return regexp(match).test(el);
-    } else if(isFunction(match) && !isFunction(el)) {
+    } else if(isFunction(match)) {
       // Match against a filtering function
       return match.apply(scope, params);
     } else if(isObject(match) && isObjectPrimitive(el)) {
@@ -317,10 +317,12 @@
       var result = [], tmp;
       multiArgs(arguments, function(a) {
         if(isObjectPrimitive(a)) {
-          tmp = array.prototype.slice.call(a);
-          if(tmp.length > 0) {
-            a = tmp;
-          }
+          try {
+            tmp = array.prototype.slice.call(a, 0);
+            if(tmp.length > 0) {
+              a = tmp;
+            }
+          } catch(e) {}
         }
         result = result.concat(a);
       });
@@ -905,15 +907,8 @@
      *
      ***/
     'sample': function(num) {
-      var result = [], arr = this.clone(), index;
-      if(isUndefined(num)) num = 1;
-      while(result.length < num) {
-        index = floor(math.random() * (arr.length - 1));
-        result.push(arr[index]);
-        arr.removeAt(index);
-        if(arr.length == 0) break;
-      }
-      return arguments.length > 0 ? result : result[0];
+      var arr = this.randomize();
+      return arguments.length > 0 ? arr.slice(0, num) : arr[0];
     },
 
     /***
@@ -1102,6 +1097,7 @@
    * @extra In cases where a callback is used, instead of %element, index%, the callback will instead be passed %key, value%. Enumerable methods are also available to extended objects as instance methods.
    *
    * @set
+   *   each
    *   map
    *   any
    *   all
@@ -1131,7 +1127,8 @@
     extendSimilar(object, false, false, names, function(methods, name) {
       methods[name] = function(obj, arg1, arg2) {
         var result;
-        result = array.prototype[name].call(keysWithCoercion(obj), function(key) {
+        var x =  keysWithCoercion(obj);
+        result = array.prototype[name].call(x, function(key) {
           if(mapping) {
             return transformArgument(obj[key], arg1, obj, [key, obj[key], obj]);
           } else {
@@ -1168,6 +1165,12 @@
       return values.reduce.apply(values, multiArgs(arguments).slice(1));
     },
 
+    'each': function(obj, fn) {
+      checkCallback(fn);
+      iterateOverObject(obj, fn);
+      return obj;
+    },
+
     /***
      * @method size(<obj>)
      * @returns Number
@@ -1186,7 +1189,7 @@
 
   buildEnhancements();
   buildAlphanumericSort();
-  buildEnumerableMethods('each,any,all,none,count,find,findAll,isEmpty');
+  buildEnumerableMethods('any,all,none,count,find,findAll,isEmpty');
   buildEnumerableMethods('sum,average,min,max,least,most', true);
   buildObjectInstanceMethods('map,reduce,size', Hash);
 
