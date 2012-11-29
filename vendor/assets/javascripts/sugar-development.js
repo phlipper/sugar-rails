@@ -1,5 +1,5 @@
 /*
- *  Sugar Library v1.3.6
+ *  Sugar Library v1.3.7
  *
  *  Freely distributable and licensed under the MIT-style license.
  *  Copyright (c) 2012 Andrew Plummer
@@ -126,6 +126,10 @@
       if(fn) fn.call(args, args[i], i);
     }
     return result;
+  }
+
+  function flattenedArgs(obj, fn, from) {
+    multiArgs(array.prototype.concat.apply([], array.prototype.slice.call(obj, from || 0)), fn);
   }
 
   function checkCallback(fn) {
@@ -458,7 +462,6 @@
       throw new TypeError('First argument must be defined');
     }
   }
-
 
 
 
@@ -1039,8 +1042,11 @@
         min = which === 'min',
         isArray = Array.isArray(obj);
     iterateOverObject(obj, function(key) {
-      var el = obj[key];
-      var test = transformArgument(el, map, obj, isArray ? [el, parseInt(key), obj] : []);
+      var el   = obj[key],
+          test = transformArgument(el, map, obj, isArray ? [el, parseInt(key), obj] : []);
+      if(isUndefined(test)) {
+        throw new TypeError('Cannot compare with undefined');
+      }
       if(test === edge) {
         result.push(el);
       } else if(isUndefined(edge) || (max && test > edge) || (min && test < edge)) {
@@ -1166,7 +1172,7 @@
             if(tmp.length > 0) {
               a = tmp;
             }
-          } catch(e) {}
+          } catch(e) {};
         }
         result = result.concat(a);
       });
@@ -1312,7 +1318,7 @@
     /***
      * @method clone()
      * @returns Array
-     * @short Clones the array.
+     * @short Makes a shallow clone of the array.
      * @example
      *
      *   [1,2,3].clone() -> [1,2,3]
@@ -2031,11 +2037,16 @@
 
   });
 
+  var EnumerableFindingMethods = 'any,all,none,count,find,findAll,isEmpty'.split(',');
+  var EnumerableMappingMethods = 'sum,average,min,max,least,most'.split(',');
+  var EnumerableOtherMethods   = 'map,reduce,size'.split(',');
+  var EnumerableMethods        = EnumerableFindingMethods.concat(EnumerableMappingMethods).concat(EnumerableOtherMethods);
+
   buildEnhancements();
   buildAlphanumericSort();
-  buildEnumerableMethods('any,all,none,count,find,findAll,isEmpty');
-  buildEnumerableMethods('sum,average,min,max,least,most', true);
-  buildObjectInstanceMethods('map,reduce,size', Hash);
+  buildEnumerableMethods(EnumerableFindingMethods);
+  buildEnumerableMethods(EnumerableMappingMethods, true);
+  buildObjectInstanceMethods(EnumerableOtherMethods, Hash);
 
 
   /***
@@ -2190,7 +2201,8 @@
           }
         }
         return days * 24 * 60 * 60 * 1000;
-      }
+      },
+      error: 0.919
     },
     {
       unit: 'week',
@@ -2625,9 +2637,11 @@
     d.utc(forceUTC);
 
     if(isDate(f)) {
-      d = new date(f.getTime());
+      // If the source here is already a date object, then the operation
+      // is the same as cloning the date, which preserves the UTC flag.
+      d.utc(f.isUTC()).setTime(f.getTime());
     } else if(isNumber(f)) {
-      d = new date(f);
+      d.setTime(f);
     } else if(isObject(f)) {
       d.set(f, true);
       set = f;
@@ -2788,6 +2802,11 @@
         // The Date constructor does something tricky like checking the number
         // of arguments so simply passing in undefined won't work.
         d = f ? new date(f) : new date();
+        if(forceUTC) {
+          // Falling back to system date here which cannot be parsed as UTC,
+          // so if we're forcing UTC then simply add the offset.
+          d.addMinutes(d.getTimezoneOffset());
+        }
       } else if(relative) {
         d.advance(set);
       } else {
@@ -2818,9 +2837,13 @@
       if(after) {
         after();
       }
-
+      // A date created by parsing a string presumes that the format *itself* is UTC, but
+      // not that the date, once created, should be manipulated as such. In other words,
+      // if you are creating a date object from a server time "2012-11-15T12:00:00Z",
+      // in the majority of cases you are using it to create a date that will, after creation,
+      // be manipulated as local, so reset the utc flag here.
+      d.utc(false);
     }
-    d.utc(false);
     return {
       date: d,
       set: set
@@ -3322,11 +3345,33 @@
     extendSimilar(date, true, false, DateUnits, function(methods, u, i) {
       var unit = u.unit, caps = simpleCapitalize(unit), multiplier = u.multiplier(), since, until;
       u.addMethod = 'add' + caps + 's';
+      // "since/until now" only count "past" an integer, i.e. "2 days ago" is
+      // anything between 2 - 2.999 days. The default margin of error is 0.999,
+      // but "months" have an inherently larger margin, as the number of days
+      // in a given month may be significantly less than the number of days in
+      // the average month, so for example "30 days" before March 15 may in fact
+      // be 1 month ago. Years also have a margin of error due to leap years,
+      // but this is roughly 0.999 anyway (365 / 365.25). Other units do not
+      // technically need the error margin applied to them but this accounts
+      // for discrepancies like (15).hoursAgo() which technically creates the
+      // current date first, then creates a date 15 hours before and compares
+      // them, the discrepancy between the creation of the 2 dates means that
+      // they may actually be 15.0001 hours apart. Milliseconds don't have
+      // fractions, so they won't be subject to this error margin.
+      function applyErrorMargin(ms) {
+        var num      = ms / multiplier,
+            fraction = num % 1,
+            error    = u.error || 0.999;
+        if(fraction && math.abs(fraction % 1) > error) {
+          num = round(num);
+        }
+        return parseInt(num);
+      }
       since = function(f, localeCode) {
-        return round((this.getTime() - date.create(f, localeCode).getTime()) / multiplier);
+        return applyErrorMargin(this.getTime() - date.create(f, localeCode).getTime());
       };
       until = function(f, localeCode) {
-        return round((date.create(f, localeCode).getTime() - this.getTime()) / multiplier);
+        return applyErrorMargin(date.create(f, localeCode).getTime() - this.getTime());
       };
       methods[unit+'sAgo']     = until;
       methods[unit+'sUntil']   = until;
@@ -3715,7 +3760,7 @@
      *
      ***/
     'utc': function(set) {
-      this._utc = set === true || arguments.length === 0;
+      defineProperty(this, '_utc', set === true || arguments.length === 0);
       return this;
     },
 
@@ -3723,11 +3768,11 @@
      * @method isUTC()
      * @returns Boolean
      * @short Returns true if the date has no timezone offset.
-     * @extra This will also return true for a date that has had %toUTC% called on it. This is intended to help approximate shifting timezones which is not possible in client-side Javascript. Note that the native method %getTimezoneOffset% will always report the same thing, even if %isUTC% becomes true.
+     * @extra This will also return true for utc-based dates (dates that have the %utc% method set true). Note that even if the utc flag is set, %getTimezoneOffset% will always report the same thing as Javascript always reports that based on the environment's locale.
      * @example
      *
-     *   new Date().isUTC()         -> true or false?
-     *   new Date().toUTC().isUTC() -> true
+     *   new Date().isUTC()           -> true or false?
+     *   new Date().utc(true).isUTC() -> true
      *
      ***/
     'isUTC': function() {
@@ -3979,7 +4024,7 @@
      ***/
     'clone': function() {
       var d = new date(this.getTime());
-      d._utc = this._utc;
+      d.utc(this.isUTC());
       return d;
     }
 
@@ -4416,6 +4461,19 @@
         this.start > range.start ? this.start : range.start,
         this.end   < range.end   ? this.end   : range.end
       );
+    },
+
+    /***
+     * @method clone()
+     * @returns DateRange
+     * @short Clones the DateRange.
+     * @example
+     *
+     *   Date.range('2003-01', '2005-01').intersect(Date.range('2004-01', '2006-01')) -> Jan 1, 2004..Jan 1, 2005
+     *
+     ***/
+    'clone': function(range) {
+      return new DateRange(this.start, this.end);
     }
 
   });
@@ -5128,7 +5186,7 @@
    ***/
 
   var ObjectTypeMethods = 'isObject,isNaN'.split(',');
-  var ObjectHashMethods = 'keys,values,each,merge,clone,equal,watch,tap,has'.split(',');
+  var ObjectHashMethods = 'keys,values,select,reject,each,merge,clone,equal,watch,tap,has'.split(',');
 
   function setParamsObject(obj, param, value, deep) {
     var reg = /^(.+?)(\[.*\])$/, paramIsArray, match, allKeys, key;
@@ -5138,7 +5196,7 @@
       allKeys.forEach(function(k) {
         paramIsArray = !k || k.match(/^\d+$/);
         if(!key && isArray(obj)) key = obj.length;
-        if(!obj[key]) {
+        if(!hasOwnProperty(obj, key)) {
           obj[key] = paramIsArray ? [] : {};
         }
         obj = obj[key];
@@ -5155,6 +5213,32 @@
     } else {
       obj[param] = value;
     }
+  }
+
+  function matchKey(key, match) {
+    if(isRegExp(match)) {
+      return match.test(key);
+    } else if(isObjectPrimitive(match)) {
+      return hasOwnProperty(match, key);
+    } else {
+      return key === string(match);
+    }
+  }
+
+  function selectFromObject(obj, args, select) {
+    var result = {}, match;
+    iterateOverObject(obj, function(key, value) {
+      match = false;
+      flattenedArgs(args, function(arg) {
+        if(matchKey(key, arg)) {
+          match = true;
+        }
+      }, 1);
+      if(match === select) {
+        result[key] = value;
+      }
+    });
+    return result;
   }
 
 
@@ -5196,7 +5280,11 @@
   function buildObjectExtend() {
     extend(object, false, function(){ return arguments.length === 0; }, {
       'extend': function() {
-        buildObjectInstanceMethods(ObjectTypeMethods.concat(ObjectHashMethods), object);
+        var methods = ObjectTypeMethods.concat(ObjectHashMethods)
+        if(typeof EnumerableMethods !== 'undefined') {
+          methods = methods.concat(EnumerableMethods);
+        }
+        buildObjectInstanceMethods(methods, object);
       }
     });
   }
@@ -5390,9 +5478,13 @@
      *
      ***/
     'clone': function(obj, deep) {
+      var target;
       if(!isObjectPrimitive(obj)) return obj;
-      if(array.isArray(obj)) return obj.concat();
-      var target = obj instanceof Hash ? new Hash() : {};
+      if (obj instanceof Hash) {
+        target = new Hash;
+      } else {
+        target = new obj.constructor;
+      }
       return object.merge(target, obj, deep);
     },
 
@@ -5457,6 +5549,42 @@
      ***/
     'has': function (obj, key) {
       return hasOwnProperty(obj, key);
+    },
+
+    /***
+     * @method select(<obj>, <find>, ...)
+     * @returns Object
+     * @short Builds a new object containing the values specified in <find>.
+     * @extra When <find> is a string, that single key will be selected. It can also be a regex, selecting any key that matches, or an object which will match if the key also exists in that object, effectively doing an "intersect" operation on that object. Multiple selections may also be passed as an array or directly as enumerated arguments. %select% is available as an instance method on extended objects.
+     * @example
+     *
+     *   Object.select({a:1,b:2}, 'a')        -> {a:1}
+     *   Object.select({a:1,b:2}, /[a-z]/)    -> {a:1,ba:2}
+     *   Object.select({a:1,b:2}, {a:1})      -> {a:1}
+     *   Object.select({a:1,b:2}, 'a', 'b')   -> {a:1,b:2}
+     *   Object.select({a:1,b:2}, ['a', 'b']) -> {a:1,b:2}
+     *
+     ***/
+    'select': function (obj) {
+      return selectFromObject(obj, arguments, true);
+    },
+
+    /***
+     * @method reject(<obj>, <find>, ...)
+     * @returns Object
+     * @short Builds a new object containing all values except those specified in <find>.
+     * @extra When <find> is a string, that single key will be rejected. It can also be a regex, rejecting any key that matches, or an object which will match if the key also exists in that object, effectively "subtracting" that object. Multiple selections may also be passed as an array or directly as enumerated arguments. %reject% is available as an instance method on extended objects.
+     * @example
+     *
+     *   Object.reject({a:1,b:2}, 'a')        -> {b:2}
+     *   Object.reject({a:1,b:2}, /[a-z]/)    -> {}
+     *   Object.reject({a:1,b:2}, {a:1})      -> {b:2}
+     *   Object.reject({a:1,b:2}, 'a', 'b')   -> {}
+     *   Object.reject({a:1,b:2}, ['a', 'b']) -> {}
+     *
+     ***/
+    'reject': function (obj) {
+      return selectFromObject(obj, arguments, false);
     }
 
   });
@@ -5651,6 +5779,56 @@
       return output;
     }
   }
+
+
+  extend(string, true, function(reg) { return isRegExp(reg) || arguments.length > 2; }, {
+
+    /***
+     * @method startsWith(<find>, [pos] = 0, [case] = true)
+     * @returns Boolean
+     * @short Returns true if the string starts with <find>.
+     * @extra <find> may be either a string or regex. Search begins at [pos], which defaults to the entire string. Case sensitive if [case] is true.
+     * @example
+     *
+     *   'hello'.startsWith('hell')           -> true
+     *   'hello'.startsWith(/[a-h]/)          -> true
+     *   'hello'.startsWith('HELL')           -> false
+     *   'hello'.startsWith('ell', 1)         -> true
+     *   'hello'.startsWith('HELL', 0, false) -> true
+     *
+     ***/
+    'startsWith': function(reg, pos, c) {
+      var str = this, source;
+      if(pos) str = str.slice(pos);
+      if(isUndefined(c)) c = true;
+      source = isRegExp(reg) ? reg.source.replace('^', '') : escapeRegExp(reg);
+      return regexp('^' + source, c ? '' : 'i').test(str);
+    },
+
+    /***
+     * @method endsWith(<find>, [pos] = length, [case] = true)
+     * @returns Boolean
+     * @short Returns true if the string ends with <find>.
+     * @extra <find> may be either a string or regex. Search ends at [pos], which defaults to the entire string. Case sensitive if [case] is true.
+     * @example
+     *
+     *   'jumpy'.endsWith('py')            -> true
+     *   'jumpy'.endsWith(/[q-z]/)         -> true
+     *   'jumpy'.endsWith('MPY')           -> false
+     *   'jumpy'.endsWith('mp', 4)         -> false
+     *   'jumpy'.endsWith('MPY', 5, false) -> true
+     *
+     ***/
+    'endsWith': function(reg, pos, c) {
+      var str = this, source;
+      if(isDefined(pos)) str = str.slice(0, pos);
+      if(isUndefined(c)) c = true;
+      source = isRegExp(reg) ? reg.source.replace('$', '') : escapeRegExp(reg);
+      return regexp(source + '$', c ? '' : 'i').test(str);
+    }
+
+  });
+
 
   extend(string, true, false, {
 
@@ -5915,44 +6093,6 @@
     },
 
     /***
-     * @method startsWith(<find>, [case] = true)
-     * @returns Boolean
-     * @short Returns true if the string starts with <find>.
-     * @extra <find> may be either a string or regex. Case sensitive if [case] is true.
-     * @example
-     *
-     *   'hello'.startsWith('hell')        -> true
-     *   'hello'.startsWith(/[a-h]/)       -> true
-     *   'hello'.startsWith('HELL')        -> false
-     *   'hello'.startsWith('HELL', false) -> true
-     *
-     ***/
-    'startsWith': function(reg, c) {
-      if(isUndefined(c)) c = true;
-      var source = isRegExp(reg) ? reg.source.replace('^', '') : escapeRegExp(reg);
-      return regexp('^' + source, c ? '' : 'i').test(this);
-    },
-
-    /***
-     * @method endsWith(<find>, [case] = true)
-     * @returns Boolean
-     * @short Returns true if the string ends with <find>.
-     * @extra <find> may be either a string or regex. Case sensitive if [case] is true.
-     * @example
-     *
-     *   'jumpy'.endsWith('py')         -> true
-     *   'jumpy'.endsWith(/[q-z]/)      -> true
-     *   'jumpy'.endsWith('MPY')        -> false
-     *   'jumpy'.endsWith('MPY', false) -> true
-     *
-     ***/
-    'endsWith': function(reg, c) {
-      if(isUndefined(c)) c = true;
-      var source = isRegExp(reg) ? reg.source.replace('$', '') : escapeRegExp(reg);
-      return regexp(source + '$', c ? '' : 'i').test(this);
-    },
-
-    /***
      * @method isBlank()
      * @returns Boolean
      * @short Returns true if the string has a length of 0 or contains only whitespace.
@@ -6177,7 +6317,7 @@
      ***/
     'stripTags': function() {
       var str = this, args = arguments.length > 0 ? arguments : [''];
-      multiArgs(args, function(tag) {
+      flattenedArgs(args, function(tag) {
         str = str.replace(regexp('<\/?' + escapeRegExp(tag) + '[^<>]*>', 'gi'), '');
       });
       return str;
@@ -6196,7 +6336,7 @@
      ***/
     'removeTags': function() {
       var str = this, args = arguments.length > 0 ? arguments : ['\\S+'];
-      multiArgs(args, function(t) {
+      flattenedArgs(args, function(t) {
         var reg = regexp('<(' + t + ')[^<>]*(?:\\/>|>.*?<\\/\\1>)', 'gi');
         str = str.replace(reg, '');
       });
@@ -6787,10 +6927,11 @@
      *
      ***/
     'humanize': function() {
-      var str = runReplacements(this, humans);
+      var str = runReplacements(this, humans), acronym;
       str = str.replace(/_id$/g, '');
       str = str.replace(/(_)?([a-z\d]*)/gi, function(match, _, word){
-        return (_ ? ' ' : '') + (acronyms[word] || word.toLowerCase());
+        acronym = hasOwnProperty(acronyms, word) ? acronyms[word] : null;
+        return (_ ? ' ' : '') + (acronym || word.toLowerCase());
       });
       return capitalize(str);
     },

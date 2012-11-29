@@ -195,8 +195,11 @@
         min = which === 'min',
         isArray = Array.isArray(obj);
     iterateOverObject(obj, function(key) {
-      var el = obj[key];
-      var test = transformArgument(el, map, obj, isArray ? [el, parseInt(key), obj] : []);
+      var el   = obj[key],
+          test = transformArgument(el, map, obj, isArray ? [el, parseInt(key), obj] : []);
+      if(isUndefined(test)) {
+        throw new TypeError('Cannot compare with undefined');
+      }
       if(test === edge) {
         result.push(el);
       } else if(isUndefined(edge) || (max && test > edge) || (min && test < edge)) {
@@ -322,7 +325,7 @@
             if(tmp.length > 0) {
               a = tmp;
             }
-          } catch(e) {}
+          } catch(e) {};
         }
         result = result.concat(a);
       });
@@ -468,7 +471,7 @@
     /***
      * @method clone()
      * @returns Array
-     * @short Clones the array.
+     * @short Makes a shallow clone of the array.
      * @example
      *
      *   [1,2,3].clone() -> [1,2,3]
@@ -1187,9 +1190,14 @@
 
   });
 
+  var EnumerableFindingMethods = 'any,all,none,count,find,findAll,isEmpty'.split(',');
+  var EnumerableMappingMethods = 'sum,average,min,max,least,most'.split(',');
+  var EnumerableOtherMethods   = 'map,reduce,size'.split(',');
+  var EnumerableMethods        = EnumerableFindingMethods.concat(EnumerableMappingMethods).concat(EnumerableOtherMethods);
+
   buildEnhancements();
   buildAlphanumericSort();
-  buildEnumerableMethods('any,all,none,count,find,findAll,isEmpty');
-  buildEnumerableMethods('sum,average,min,max,least,most', true);
-  buildObjectInstanceMethods('map,reduce,size', Hash);
+  buildEnumerableMethods(EnumerableFindingMethods);
+  buildEnumerableMethods(EnumerableMappingMethods, true);
+  buildObjectInstanceMethods(EnumerableOtherMethods, Hash);
 

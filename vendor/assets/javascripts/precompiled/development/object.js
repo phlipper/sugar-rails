@@ -9,7 +9,7 @@
    ***/
 
   var ObjectTypeMethods = 'isObject,isNaN'.split(',');
-  var ObjectHashMethods = 'keys,values,each,merge,clone,equal,watch,tap,has'.split(',');
+  var ObjectHashMethods = 'keys,values,select,reject,each,merge,clone,equal,watch,tap,has'.split(',');
 
   function setParamsObject(obj, param, value, deep) {
     var reg = /^(.+?)(\[.*\])$/, paramIsArray, match, allKeys, key;
@@ -19,7 +19,7 @@
       allKeys.forEach(function(k) {
         paramIsArray = !k || k.match(/^\d+$/);
         if(!key && isArray(obj)) key = obj.length;
-        if(!obj[key]) {
+        if(!hasOwnProperty(obj, key)) {
           obj[key] = paramIsArray ? [] : {};
         }
         obj = obj[key];
@@ -36,6 +36,32 @@
     } else {
       obj[param] = value;
     }
+  }
+
+  function matchKey(key, match) {
+    if(isRegExp(match)) {
+      return match.test(key);
+    } else if(isObjectPrimitive(match)) {
+      return hasOwnProperty(match, key);
+    } else {
+      return key === string(match);
+    }
+  }
+
+  function selectFromObject(obj, args, select) {
+    var result = {}, match;
+    iterateOverObject(obj, function(key, value) {
+      match = false;
+      flattenedArgs(args, function(arg) {
+        if(matchKey(key, arg)) {
+          match = true;
+        }
+      }, 1);
+      if(match === select) {
+        result[key] = value;
+      }
+    });
+    return result;
   }
 
 
@@ -77,7 +103,11 @@
   function buildObjectExtend() {
     extend(object, false, function(){ return arguments.length === 0; }, {
       'extend': function() {
-        buildObjectInstanceMethods(ObjectTypeMethods.concat(ObjectHashMethods), object);
+        var methods = ObjectTypeMethods.concat(ObjectHashMethods)
+        if(typeof EnumerableMethods !== 'undefined') {
+          methods = methods.concat(EnumerableMethods);
+        }
+        buildObjectInstanceMethods(methods, object);
       }
     });
   }
@@ -271,9 +301,13 @@
      *
      ***/
     'clone': function(obj, deep) {
+      var target;
       if(!isObjectPrimitive(obj)) return obj;
-      if(array.isArray(obj)) return obj.concat();
-      var target = obj instanceof Hash ? new Hash() : {};
+      if (obj instanceof Hash) {
+        target = new Hash;
+      } else {
+        target = new obj.constructor;
+      }
       return object.merge(target, obj, deep);
     },
 
@@ -338,6 +372,42 @@
      ***/
     'has': function (obj, key) {
       return hasOwnProperty(obj, key);
+    },
+
+    /***
+     * @method select(<obj>, <find>, ...)
+     * @returns Object
+     * @short Builds a new object containing the values specified in <find>.
+     * @extra When <find> is a string, that single key will be selected. It can also be a regex, selecting any key that matches, or an object which will match if the key also exists in that object, effectively doing an "intersect" operation on that object. Multiple selections may also be passed as an array or directly as enumerated arguments. %select% is available as an instance method on extended objects.
+     * @example
+     *
+     *   Object.select({a:1,b:2}, 'a')        -> {a:1}
+     *   Object.select({a:1,b:2}, /[a-z]/)    -> {a:1,ba:2}
+     *   Object.select({a:1,b:2}, {a:1})      -> {a:1}
+     *   Object.select({a:1,b:2}, 'a', 'b')   -> {a:1,b:2}
+     *   Object.select({a:1,b:2}, ['a', 'b']) -> {a:1,b:2}
+     *
+     ***/
+    'select': function (obj) {
+      return selectFromObject(obj, arguments, true);
+    },
+
+    /***
+     * @method reject(<obj>, <find>, ...)
+     * @returns Object
+     * @short Builds a new object containing all values except those specified in <find>.
+     * @extra When <find> is a string, that single key will be rejected. It can also be a regex, rejecting any key that matches, or an object which will match if the key also exists in that object, effectively "subtracting" that object. Multiple selections may also be passed as an array or directly as enumerated arguments. %reject% is available as an instance method on extended objects.
+     * @example
+     *
+     *   Object.reject({a:1,b:2}, 'a')        -> {b:2}
+     *   Object.reject({a:1,b:2}, /[a-z]/)    -> {}
+     *   Object.reject({a:1,b:2}, {a:1})      -> {b:2}
+     *   Object.reject({a:1,b:2}, 'a', 'b')   -> {}
+     *   Object.reject({a:1,b:2}, ['a', 'b']) -> {}
+     *
+     ***/
+    'reject': function (obj) {
+      return selectFromObject(obj, arguments, false);
     }
 
   });

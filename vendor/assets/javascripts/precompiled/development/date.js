@@ -151,7 +151,8 @@
           }
         }
         return days * 24 * 60 * 60 * 1000;
-      }
+      },
+      error: 0.919
     },
     {
       unit: 'week',
@@ -586,9 +587,11 @@
     d.utc(forceUTC);
 
     if(isDate(f)) {
-      d = new date(f.getTime());
+      // If the source here is already a date object, then the operation
+      // is the same as cloning the date, which preserves the UTC flag.
+      d.utc(f.isUTC()).setTime(f.getTime());
     } else if(isNumber(f)) {
-      d = new date(f);
+      d.setTime(f);
     } else if(isObject(f)) {
       d.set(f, true);
       set = f;
@@ -749,6 +752,11 @@
         // The Date constructor does something tricky like checking the number
         // of arguments so simply passing in undefined won't work.
         d = f ? new date(f) : new date();
+        if(forceUTC) {
+          // Falling back to system date here which cannot be parsed as UTC,
+          // so if we're forcing UTC then simply add the offset.
+          d.addMinutes(d.getTimezoneOffset());
+        }
       } else if(relative) {
         d.advance(set);
       } else {
@@ -779,9 +787,13 @@
       if(after) {
         after();
       }
-
+      // A date created by parsing a string presumes that the format *itself* is UTC, but
+      // not that the date, once created, should be manipulated as such. In other words,
+      // if you are creating a date object from a server time "2012-11-15T12:00:00Z",
+      // in the majority of cases you are using it to create a date that will, after creation,
+      // be manipulated as local, so reset the utc flag here.
+      d.utc(false);
     }
-    d.utc(false);
     return {
       date: d,
       set: set
@@ -1283,11 +1295,33 @@
     extendSimilar(date, true, false, DateUnits, function(methods, u, i) {
       var unit = u.unit, caps = simpleCapitalize(unit), multiplier = u.multiplier(), since, until;
       u.addMethod = 'add' + caps + 's';
+      // "since/until now" only count "past" an integer, i.e. "2 days ago" is
+      // anything between 2 - 2.999 days. The default margin of error is 0.999,
+      // but "months" have an inherently larger margin, as the number of days
+      // in a given month may be significantly less than the number of days in
+      // the average month, so for example "30 days" before March 15 may in fact
+      // be 1 month ago. Years also have a margin of error due to leap years,
+      // but this is roughly 0.999 anyway (365 / 365.25). Other units do not
+      // technically need the error margin applied to them but this accounts
+      // for discrepancies like (15).hoursAgo() which technically creates the
+      // current date first, then creates a date 15 hours before and compares
+      // them, the discrepancy between the creation of the 2 dates means that
+      // they may actually be 15.0001 hours apart. Milliseconds don't have
+      // fractions, so they won't be subject to this error margin.
+      function applyErrorMargin(ms) {
+        var num      = ms / multiplier,
+            fraction = num % 1,
+            error    = u.error || 0.999;
+        if(fraction && math.abs(fraction % 1) > error) {
+          num = round(num);
+        }
+        return parseInt(num);
+      }
       since = function(f, localeCode) {
-        return round((this.getTime() - date.create(f, localeCode).getTime()) / multiplier);
+        return applyErrorMargin(this.getTime() - date.create(f, localeCode).getTime());
       };
       until = function(f, localeCode) {
-        return round((date.create(f, localeCode).getTime() - this.getTime()) / multiplier);
+        return applyErrorMargin(date.create(f, localeCode).getTime() - this.getTime());
       };
       methods[unit+'sAgo']     = until;
       methods[unit+'sUntil']   = until;
@@ -1676,7 +1710,7 @@
      *
      ***/
     'utc': function(set) {
-      this._utc = set === true || arguments.length === 0;
+      defineProperty(this, '_utc', set === true || arguments.length === 0);
       return this;
     },
 
@@ -1684,11 +1718,11 @@
      * @method isUTC()
      * @returns Boolean
      * @short Returns true if the date has no timezone offset.
-     * @extra This will also return true for a date that has had %toUTC% called on it. This is intended to help approximate shifting timezones which is not possible in client-side Javascript. Note that the native method %getTimezoneOffset% will always report the same thing, even if %isUTC% becomes true.
+     * @extra This will also return true for utc-based dates (dates that have the %utc% method set true). Note that even if the utc flag is set, %getTimezoneOffset% will always report the same thing as Javascript always reports that based on the environment's locale.
      * @example
      *
-     *   new Date().isUTC()         -> true or false?
-     *   new Date().toUTC().isUTC() -> true
+     *   new Date().isUTC()           -> true or false?
+     *   new Date().utc(true).isUTC() -> true
      *
      ***/
     'isUTC': function() {
@@ -1940,7 +1974,7 @@
      ***/
     'clone': function() {
       var d = new date(this.getTime());
-      d._utc = this._utc;
+      d.utc(this.isUTC());
       return d;
     }
 
