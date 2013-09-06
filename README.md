@@ -104,6 +104,8 @@ Many thanks go to the following who have contributed to making this gem even bet
 * **[@andrewplummer](https://github.com/andrewplummer)**
   * add build generator to support customized builds in 1.3+
   * created [Sugar](https://github.com/andrewplummer/Sugar) :)
+* **[@pierrickrouxel](https://github.com/pierrickrouxel)**
+  * update to support Sugar 1.4.0 and Rails 4.0
 
 
 ## License
