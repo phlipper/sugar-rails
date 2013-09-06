@@ -1,12 +1,13 @@
 /*
- *  Sugar Library v1.3.7
+ *  Sugar Library v1.4.0
  *
  *  Freely distributable and licensed under the MIT-style license.
- *  Copyright (c) 2012 Andrew Plummer
+ *  Copyright (c) 2013 Andrew Plummer
  *  http://sugarjs.com/
  *
  * ---------------------------- */
 (function(){
+  'use strict';
 
   /***
    * @package Core
@@ -20,30 +21,80 @@
   // The global context
   var globalContext = typeof global !== 'undefined' ? global : this;
 
+  // Internal toString
+  var internalToString = object.prototype.toString;
+
+  // Internal hasOwnProperty
+  var internalHasOwnProperty = object.prototype.hasOwnProperty;
+
   // defineProperty exists in IE8 but will error when trying to define a property on
   // native objects. IE8 does not have defineProperies, however, so this check saves a try/catch block.
   var definePropertySupport = object.defineProperty && object.defineProperties;
 
+  // Are regexes type function?
+  var regexIsFunction = typeof regexp() === 'function';
+
+  // Do strings have no keys?
+  var noKeysInStringObjects = !('0' in new string('a'));
+
+  // Type check methods need a way to be accessed dynamically.
+  var typeChecks = {};
+
+  // Classes that can be matched by value
+  var matchedByValueReg = /^\[object Date|Array|String|Number|RegExp|Boolean|Arguments\]$/;
+
   // Class initializers and class helpers
+  var ClassNames = 'Boolean,Number,String,Array,Date,RegExp,Function'.split(',');
 
-  var ClassNames = 'Array,Boolean,Date,Function,Number,String,RegExp'.split(',');
+  var isBoolean  = buildPrimitiveClassCheck('boolean', ClassNames[0]);
+  var isNumber   = buildPrimitiveClassCheck('number',  ClassNames[1]);
+  var isString   = buildPrimitiveClassCheck('string',  ClassNames[2]);
 
-  var isArray    = buildClassCheck(ClassNames[0]);
-  var isBoolean  = buildClassCheck(ClassNames[1]);
-  var isDate     = buildClassCheck(ClassNames[2]);
-  var isFunction = buildClassCheck(ClassNames[3]);
-  var isNumber   = buildClassCheck(ClassNames[4]);
-  var isString   = buildClassCheck(ClassNames[5]);
-  var isRegExp   = buildClassCheck(ClassNames[6]);
+  var isArray    = buildClassCheck(ClassNames[3]);
+  var isDate     = buildClassCheck(ClassNames[4]);
+  var isRegExp   = buildClassCheck(ClassNames[5]);
 
-  function buildClassCheck(type) {
-    return function(obj) {
-      return className(obj) === '[object '+type+']';
+
+  // Wanted to enhance performance here by using simply "typeof"
+  // but Firefox has two major issues that make this impossible,
+  // one fixed, the other not. Despite being typeof "function"
+  // the objects below still report in as [object Function], so
+  // we need to perform a full class check here.
+  //
+  // 1. Regexes can be typeof "function" in FF < 3
+  //    https://bugzilla.mozilla.org/show_bug.cgi?id=61911 (fixed)
+  //
+  // 2. HTMLEmbedElement and HTMLObjectElement are be typeof "function"
+  //    https://bugzilla.mozilla.org/show_bug.cgi?id=268945 (won't fix)
+  //
+  var isFunction = buildClassCheck(ClassNames[6]);
+
+  function isClass(obj, klass, cached) {
+    var k = cached || className(obj);
+    return k === '[object '+klass+']';
+  }
+
+  function buildClassCheck(klass) {
+    var fn = (klass === 'Array' && array.isArray) || function(obj, cached) {
+      return isClass(obj, klass, cached);
+    };
+    typeChecks[klass] = fn;
+    return fn;
+  }
+
+  function buildPrimitiveClassCheck(type, klass) {
+    var fn = function(obj) {
+      if(isObjectType(obj)) {
+        return isClass(obj, klass);
+      }
+      return typeof obj === type;
     }
+    typeChecks[klass] = fn;
+    return fn;
   }
 
   function className(obj) {
-    return object.prototype.toString.call(obj);
+    return internalToString.call(obj);
   }
 
   function initializeClasses() {
@@ -56,17 +107,23 @@
   function initializeClass(klass) {
     if(klass['SugarMethods']) return;
     defineProperty(klass, 'SugarMethods', {});
-    extend(klass, false, false, {
-      'restore': function() {
-        var all = arguments.length === 0, methods = multiArgs(arguments);
-        iterateOverObject(klass['SugarMethods'], function(name, m) {
-          if(all || methods.indexOf(name) > -1) {
-            defineProperty(m.instance ? klass.prototype : klass, name, m.method);
-          }
-        });
-      },
+    extend(klass, false, true, {
       'extend': function(methods, override, instance) {
         extend(klass, instance !== false, override, methods);
+      },
+      'sugarRestore': function() {
+        return batchMethodExecute(this, klass, arguments, function(target, name, m) {
+          defineProperty(target, name, m.method);
+        });
+      },
+      'sugarRevert': function() {
+        return batchMethodExecute(this, klass, arguments, function(target, name, m) {
+          if(m['existed']) {
+            defineProperty(target, name, m['original']);
+          } else {
+            delete target[name];
+          }
+        });
       }
     });
   }
@@ -74,18 +131,25 @@
   // Class extending methods
 
   function extend(klass, instance, override, methods) {
-    var extendee = instance ? klass.prototype : klass, original;
+    var extendee = instance ? klass.prototype : klass;
     initializeClass(klass);
-    iterateOverObject(methods, function(name, method) {
-      original = extendee[name];
-      if(typeof override === 'function') {
-        method = wrapNative(extendee[name], method, override);
+    iterateOverObject(methods, function(name, extendedFn) {
+      var nativeFn = extendee[name],
+          existed  = hasOwnProperty(extendee, name);
+      if(isFunction(override) && nativeFn) {
+        extendedFn = wrapNative(nativeFn, extendedFn, override);
       }
-      if(override !== false || !extendee[name]) {
-        defineProperty(extendee, name, method);
+      if(override !== false || !nativeFn) {
+        defineProperty(extendee, name, extendedFn);
       }
-      // If the method is internal to Sugar, then store a reference so it can be restored later.
-      klass['SugarMethods'][name] = { instance: instance, method: method, original: original };
+      // If the method is internal to Sugar, then
+      // store a reference so it can be restored later.
+      klass['SugarMethods'][name] = {
+        'method':   extendedFn,
+        'existed':  existed,
+        'original': nativeFn,
+        'instance': instance
+      };
     });
   }
 
@@ -98,19 +162,33 @@
     extend(klass, instance, override, methods);
   }
 
-  function wrapNative(nativeFn, extendedFn, condition) {
-    return function() {
-      if(nativeFn && (condition === true || !condition.apply(this, arguments))) {
-        return nativeFn.apply(this, arguments);
-      } else {
-        return extendedFn.apply(this, arguments);
+  function batchMethodExecute(target, klass, args, fn) {
+    var all = args.length === 0, methods = multiArgs(args), changed = false;
+    iterateOverObject(klass['SugarMethods'], function(name, m) {
+      if(all || methods.indexOf(name) !== -1) {
+        changed = true;
+        fn(m['instance'] ? target.prototype : target, name, m);
       }
+    });
+    return changed;
+  }
+
+  function wrapNative(nativeFn, extendedFn, condition) {
+    return function(a) {
+      return condition.apply(this, arguments) ?
+             extendedFn.apply(this, arguments) :
+             nativeFn.apply(this, arguments);
     }
   }
 
   function defineProperty(target, name, method) {
     if(definePropertySupport) {
-      object.defineProperty(target, name, { 'value': method, 'configurable': true, 'enumerable': false, 'writable': true });
+      object.defineProperty(target, name, {
+        'value': method,
+        'configurable': true,
+        'enumerable': false,
+        'writable': true
+      });
     } else {
       target[name] = method;
     }
@@ -119,17 +197,22 @@
 
   // Argument helpers
 
-  function multiArgs(args, fn) {
-    var result = [], i;
-    for(i = 0; i < args.length; i++) {
+  function multiArgs(args, fn, from) {
+    var result = [], i = from || 0, len;
+    for(len = args.length; i < len; i++) {
       result.push(args[i]);
       if(fn) fn.call(args, args[i], i);
     }
     return result;
   }
 
-  function flattenedArgs(obj, fn, from) {
-    multiArgs(array.prototype.concat.apply([], array.prototype.slice.call(obj, from || 0)), fn);
+  function flattenedArgs(args, fn, from) {
+    var arg = args[from || 0];
+    if(isArray(arg)) {
+      args = arg;
+      from = 0;
+    }
+    return multiArgs(args, fn, from);
   }
 
   function checkCallback(fn) {
@@ -152,20 +235,43 @@
 
   // Object helpers
 
-  function isObjectPrimitive(obj) {
-    // Check for null
-    return obj && typeof obj === 'object';
+  function hasProperty(obj, prop) {
+    return !isPrimitiveType(obj) && prop in obj;
   }
 
-  function isObject(obj) {
+  function hasOwnProperty(obj, prop) {
+    return !!obj && internalHasOwnProperty.call(obj, prop);
+  }
+
+  function isObjectType(obj) {
+    // 1. Check for null
+    // 2. Check for regexes in environments where they are "functions".
+    return !!obj && (typeof obj === 'object' || (regexIsFunction && isRegExp(obj)));
+  }
+
+  function isPrimitiveType(obj) {
+    var type = typeof obj;
+    return obj == null || type === 'string' || type === 'number' || type === 'boolean';
+  }
+
+  function isPlainObject(obj, klass) {
+    klass = klass || className(obj);
+    try {
+      // Not own constructor property must be Object
+      // This code was borrowed from jQuery.isPlainObject
+      if (obj && obj.constructor &&
+            !hasOwnProperty(obj, 'constructor') &&
+            !hasOwnProperty(obj.constructor.prototype, 'isPrototypeOf')) {
+        return false;
+      }
+    } catch (e) {
+      // IE8,9 Will throw exceptions on certain host objects.
+      return false;
+    }
     // === on the constructor is not safe across iframes
     // 'hasOwnProperty' ensures that the object also inherits
     // from Object, which is false for DOMElements in IE.
-    return !!obj && className(obj) === '[object Object]' && 'hasOwnProperty' in obj;
-  }
-
-  function hasOwnProperty(obj, key) {
-    return object['hasOwnProperty'].call(obj, key);
+    return !!obj && klass === '[object Object]' && 'hasOwnProperty' in obj;
   }
 
   function iterateOverObject(obj, fn) {
@@ -176,6 +282,12 @@
     }
   }
 
+  function simpleRepeat(n, fn) {
+    for(var i = 0; i < n; i++) {
+      fn(i);
+    }
+  }
+
   function simpleMerge(target, source) {
     iterateOverObject(source, function(key) {
       target[key] = source[key];
@@ -183,44 +295,131 @@
     return target;
   }
 
+   // Make primtives types like strings into objects.
+   function coercePrimitiveToObject(obj) {
+     if(isPrimitiveType(obj)) {
+       obj = object(obj);
+     }
+     if(noKeysInStringObjects && isString(obj)) {
+       forceStringCoercion(obj);
+     }
+     return obj;
+   }
+
+   // Force strings to have their indexes set in
+   // environments that don't do this automatically.
+   function forceStringCoercion(obj) {
+     var i = 0, chr;
+     while(chr = obj.charAt(i)) {
+       obj[i++] = chr;
+     }
+   }
+
   // Hash definition
 
   function Hash(obj) {
-    simpleMerge(this, obj);
+    simpleMerge(this, coercePrimitiveToObject(obj));
   };
 
   Hash.prototype.constructor = object;
 
-  // Number helpers
+  // Math helpers
 
-  function getRange(start, stop, fn, step) {
-    var arr = [], i = parseInt(start), down = step < 0;
-    while((!down && i <= stop) || (down && i >= stop)) {
-      arr.push(i);
-      if(fn) fn.call(this, i);
-      i += step || 1;
-    }
-    return arr;
-  }
+  var abs   = math.abs;
+  var pow   = math.pow;
+  var ceil  = math.ceil;
+  var floor = math.floor;
+  var round = math.round;
+  var min   = math.min;
+  var max   = math.max;
 
-  function round(val, precision, method) {
-    var fn = math[method || 'round'];
-    var multiplier = math.pow(10, math.abs(precision || 0));
+  function withPrecision(val, precision, fn) {
+    var multiplier = pow(10, abs(precision || 0));
+    fn = fn || round;
     if(precision < 0) multiplier = 1 / multiplier;
     return fn(val * multiplier) / multiplier;
   }
 
-  function ceil(val, precision) {
-    return round(val, precision, 'ceil');
+  // Full width number helpers
+
+  var HalfWidthZeroCode = 0x30;
+  var HalfWidthNineCode = 0x39;
+  var FullWidthZeroCode = 0xff10;
+  var FullWidthNineCode = 0xff19;
+
+  var HalfWidthPeriod = '.';
+  var FullWidthPeriod = '．';
+  var HalfWidthComma  = ',';
+
+  // Used here and later in the Date package.
+  var FullWidthDigits   = '';
+
+  var NumberNormalizeMap = {};
+  var NumberNormalizeReg;
+
+  function codeIsNumeral(code) {
+    return (code >= HalfWidthZeroCode && code <= HalfWidthNineCode) ||
+           (code >= FullWidthZeroCode && code <= FullWidthNineCode);
   }
 
-  function floor(val, precision) {
-    return round(val, precision, 'floor');
+  function buildNumberHelpers() {
+    var digit, i;
+    for(i = 0; i <= 9; i++) {
+      digit = chr(i + FullWidthZeroCode);
+      FullWidthDigits += digit;
+      NumberNormalizeMap[digit] = chr(i + HalfWidthZeroCode);
+    }
+    NumberNormalizeMap[HalfWidthComma] = '';
+    NumberNormalizeMap[FullWidthPeriod] = HalfWidthPeriod;
+    // Mapping this to itself to easily be able to easily
+    // capture it in stringToNumber to detect decimals later.
+    NumberNormalizeMap[HalfWidthPeriod] = HalfWidthPeriod;
+    NumberNormalizeReg = regexp('[' + FullWidthDigits + FullWidthPeriod + HalfWidthComma + HalfWidthPeriod + ']', 'g');
   }
+
+  // String helpers
+
+  function chr(num) {
+    return string.fromCharCode(num);
+  }
+
+  // WhiteSpace/LineTerminator as defined in ES5.1 plus Unicode characters in the Space, Separator category.
+  function getTrimmableCharacters() {
+    return '\u0009\u000A\u000B\u000C\u000D\u0020\u00A0\u1680\u180E\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u202F\u205F\u2028\u2029\u3000\uFEFF';
+  }
+
+  function repeatString(str, num) {
+    var result = '', str = str.toString();
+    while (num > 0) {
+      if (num & 1) {
+        result += str;
+      }
+      if (num >>= 1) {
+        str += str;
+      }
+    }
+    return result;
+  }
+
+  // Returns taking into account full-width characters, commas, and decimals.
+  function stringToNumber(str, base) {
+    var sanitized, isDecimal;
+    sanitized = str.replace(NumberNormalizeReg, function(chr) {
+      var replacement = NumberNormalizeMap[chr];
+      if(replacement === HalfWidthPeriod) {
+        isDecimal = true;
+      }
+      return replacement;
+    });
+    return isDecimal ? parseFloat(sanitized) : parseInt(sanitized, base || 10);
+  }
+
+
+  // Used by Number and Date
 
   function padNumber(num, place, sign, base) {
-    var str = math.abs(num).toString(base || 10);
-    str = repeatString(place - str.replace(/\.\d+/, '').length, '0') + str;
+    var str = abs(num).toString(base || 10);
+    str = repeatString('0', place - str.replace(/\.\d+/, '').length) + str;
     if(sign || num < 0) {
       str = (num < 0 ? '-' : '+') + str;
     }
@@ -241,36 +440,38 @@
   }
 
 
-  // String helpers
-
-  // WhiteSpace/LineTerminator as defined in ES5.1 plus Unicode characters in the Space, Separator category.
-  function getTrimmableCharacters() {
-    return '\u0009\u000A\u000B\u000C\u000D\u0020\u00A0\u1680\u180E\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u202F\u205F\u2028\u2029\u3000\uFEFF';
-  }
-
-  function repeatString(times, str) {
-    return array(math.max(0, isDefined(times) ? times : 1) + 1).join(str || '');
-  }
-
-
   // RegExp helpers
 
   function getRegExpFlags(reg, add) {
-    var flags = reg.toString().match(/[^/]*$/)[0];
-    if(add) {
-      flags = (flags + add).split('').sort().join('').replace(/([gimy])\1+/g, '$1');
+    var flags = '';
+    add = add || '';
+    function checkFlag(prop, flag) {
+      if(prop || add.indexOf(flag) > -1) {
+        flags += flag;
+      }
     }
+    checkFlag(reg.multiline, 'm');
+    checkFlag(reg.ignoreCase, 'i');
+    checkFlag(reg.global, 'g');
+    checkFlag(reg.sticky, 'y');
     return flags;
   }
 
   function escapeRegExp(str) {
     if(!isString(str)) str = string(str);
-    return str.replace(/([\\/'*+?|()\[\]{}.^$])/g,'\\$1');
+    return str.replace(/([\\/\'*+?|()\[\]{}.^$])/g,'\\$1');
   }
 
 
-  // Specialized helpers
+  // Date helpers
 
+  function callDateGet(d, method) {
+    return d['get' + (d._utc ? 'UTC' : '') + method]();
+  }
+
+  function callDateSet(d, method, value) {
+    return d['set' + (d._utc && method != 'ISOWeek' ? 'UTC' : '') + method](value);
+  }
 
   // Used by Array#unique and Object.equal
 
@@ -279,14 +480,14 @@
         thingIsObject,
         thingIsArray,
         klass, value,
-        arr, key, i;
+        arr, key, i, len;
 
     // Return quickly if string to save cycles
     if(type === 'string') return thing;
 
-    klass         = object.prototype.toString.call(thing)
-    thingIsObject = isObject(thing);
-    thingIsArray  = klass === '[object Array]';
+    klass         = internalToString.call(thing)
+    thingIsObject = isPlainObject(thing, klass);
+    thingIsArray  = isArray(thing, klass);
 
     if(thing != null && thingIsObject || thingIsArray) {
       // This method for checking for cyclic structures was egregiously stolen from
@@ -306,9 +507,9 @@
         }
       }
       stack.push(thing);
-      value = string(thing.constructor);
+      value = thing.valueOf() + string(thing.constructor);
       arr = thingIsArray ? thing : object.keys(thing).sort();
-      for(i = 0; i < arr.length; i++) {
+      for(i = 0, len = arr.length; i < len; i++) {
         key = thingIsArray ? i : arr[i];
         value += key + stringify(thing[key], stack);
       }
@@ -322,40 +523,50 @@
   }
 
   function isEqual(a, b) {
-    if(objectIsMatchedByValue(a) && objectIsMatchedByValue(b)) {
+    if(a === b) {
+      // Return quickly up front when matching by reference,
+      // but be careful about 0 !== -0.
+      return a !== 0 || 1 / a === 1 / b;
+    } else if(objectIsMatchedByValue(a) && objectIsMatchedByValue(b)) {
       return stringify(a) === stringify(b);
-    } else {
-      return a === b;
     }
+    return false;
   }
 
   function objectIsMatchedByValue(obj) {
+    // Only known objects are matched by value. This is notably excluding functions, DOM Elements, and instances of
+    // user-created classes. The latter can arguably be matched by value, but distinguishing between these and
+    // host objects -- which should never be compared by value -- is very tricky so not dealing with it here.
     var klass = className(obj);
-    return klass === '[object Date]'      ||
-           klass === '[object Array]'     ||
-           klass === '[object String]'    ||
-           klass === '[object Number]'    ||
-           klass === '[object RegExp]'    ||
-           klass === '[object Boolean]'   ||
-           klass === '[object Arguments]' ||
-           isObject(obj);
+    return matchedByValueReg.test(klass) || isPlainObject(obj, klass);
   }
 
 
   // Used by Array#at and String#at
 
-  function entryAtIndex(arr, args, str) {
-    var result = [], length = arr.length, loop = args[args.length - 1] !== false, r;
+  function getEntriesForIndexes(obj, args, isString) {
+    var result,
+        length    = obj.length,
+        argsLen   = args.length,
+        overshoot = args[argsLen - 1] !== false,
+        multiple  = argsLen > (overshoot ? 1 : 2);
+    if(!multiple) {
+      return entryAtIndex(obj, length, args[0], overshoot, isString);
+    }
+    result = [];
     multiArgs(args, function(index) {
       if(isBoolean(index)) return false;
-      if(loop) {
-        index = index % length;
-        if(index < 0) index = length + index;
-      }
-      r = str ? arr.charAt(index) || '' : arr[index];
-      result.push(r);
+      result.push(entryAtIndex(obj, length, index, overshoot, isString));
     });
-    return result.length < 2 ? result[0] : result;
+    return result;
+  }
+
+  function entryAtIndex(obj, length, index, overshoot, isString) {
+    if(overshoot) {
+      index = index % length;
+      if(index < 0) index = length + index;
+    }
+    return isString ? obj.charAt(index) : obj[index];
   }
 
 
@@ -370,7 +581,7 @@
   }
 
   initializeClasses();
-
+  buildNumberHelpers();
 
 
   /***
@@ -389,7 +600,7 @@
 
     'keys': function(obj) {
       var keys = [];
-      if(!isObjectPrimitive(obj) && !isRegExp(obj) && !isFunction(obj)) {
+      if(!isObjectType(obj) && !isRegExp(obj) && !isFunction(obj)) {
         throw new TypeError('Object required');
       }
       iterateOverObject(obj, function(key, value) {
@@ -548,19 +759,20 @@
      * @method map(<map>, [scope])
      * @returns Array
      * @short Maps the array to another array containing the values that are the result of calling <map> on each element.
-     * @extra [scope] is the %this% object. In addition to providing this method for browsers that don't support it natively, this enhanced method also directly accepts a string, which is a shortcut for a function that gets that property (or invokes a function) on each element.
+     * @extra [scope] is the %this% object. When <map> is a function, it receives three arguments: the current element, the current index, and a reference to the array. In addition to providing this method for browsers that don't support it natively, this enhanced method also directly accepts a string, which is a shortcut for a function that gets that property (or invokes a function) on each element.
      * @example
      *
-     +   [1,2,3].map(function(n) {
+     *   [1,2,3].map(function(n) {
      *     return n * 3;
      *   });                                  -> [3,6,9]
      *   ['one','two','three'].map(function(n) {
      *     return n.length;
      *   });                                  -> [3,3,5]
      *   ['one','two','three'].map('length')  -> [3,3,5]
+     *
      ***/
     'map': function(fn, scope) {
-      var length = this.length, index = 0, result = new Array(length);
+      var scope = arguments[1], length = this.length, index = 0, result = new Array(length);
       checkFirstArgumentExists(arguments);
       while(index < length) {
         if(index in this) {
@@ -584,7 +796,8 @@
      *   [1,2,2,4].filter(2) -> 2
      *
      ***/
-    'filter': function(fn, scope) {
+    'filter': function(fn) {
+      var scope = arguments[1];
       var length = this.length, index = 0, result = [];
       checkFirstArgumentExists(arguments);
       while(index < length) {
@@ -607,7 +820,8 @@
      *   [1,2,3].indexOf(7)           -> -1
      *
      ***/
-    'indexOf': function(search, fromIndex) {
+    'indexOf': function(search) {
+      var fromIndex = arguments[1];
       if(isString(this)) return this.indexOf(search, fromIndex);
       return arrayIndexOf(this, search, fromIndex, 1);
     },
@@ -623,7 +837,8 @@
      *   [1,2,1].lastIndexOf(7)                 -> -1
      *
      ***/
-    'lastIndexOf': function(search, fromIndex) {
+    'lastIndexOf': function(search) {
+      var fromIndex = arguments[1];
       if(isString(this)) return this.lastIndexOf(search, fromIndex);
       return arrayIndexOf(this, search, fromIndex, -1);
     },
@@ -640,8 +855,8 @@
      *   });
      *
      ***/
-    'forEach': function(fn, scope) {
-      var length = this.length, index = 0;
+    'forEach': function(fn) {
+      var length = this.length, index = 0, scope = arguments[1];
       checkCallback(fn);
       while(index < length) {
         if(index in this) {
@@ -667,8 +882,8 @@
      *   }, 100);
      *
      ***/
-    'reduce': function(fn, init) {
-      return arrayReduce(this, fn, init);
+    'reduce': function(fn) {
+      return arrayReduce(this, fn, arguments[1]);
     },
 
     /***
@@ -687,8 +902,8 @@
      *   });
      *
      ***/
-    'reduceRight': function(fn, init) {
-      return arrayReduce(this, fn, init, true);
+    'reduceRight': function(fn) {
+      return arrayReduce(this, fn, arguments[1], true);
     }
 
 
@@ -769,7 +984,7 @@
      *
      ***/
     'bind': function(scope) {
-      var fn = this, args = multiArgs(arguments).slice(1), nop, bound;
+      var fn = this, args = multiArgs(arguments, null, 1), bound;
       if(!isFunction(this)) {
         throw new TypeError('Function.prototype.bind called on a non-function');
       }
@@ -846,7 +1061,6 @@
   buildISOString();
 
 
-
   /***
    * @package Array
    * @dependency core
@@ -855,34 +1069,87 @@
    ***/
 
 
-  function multiMatch(el, match, scope, params) {
-    var result = true;
-    if(el === match) {
-      // Match strictly equal values up front.
-      return true;
-    } else if(isRegExp(match) && isString(el)) {
-      // Match against a regexp
-      return regexp(match).test(el);
-    } else if(isFunction(match)) {
-      // Match against a filtering function
-      return match.apply(scope, params);
-    } else if(isObject(match) && isObjectPrimitive(el)) {
-      // Match against a hash or array.
-      iterateOverObject(match, function(key, value) {
-        if(!multiMatch(el[key], match[key], scope, [el[key], el])) {
-          result = false;
-        }
-      });
-      return result;
-    } else {
-      return isEqual(el, match);
+  function regexMatcher(reg) {
+    reg = regexp(reg);
+    return function (el) {
+      return reg.test(el);
     }
   }
 
+  function dateMatcher(d) {
+    var ms = d.getTime();
+    return function (el) {
+      return !!(el && el.getTime) && el.getTime() === ms;
+    }
+  }
+
+  function functionMatcher(fn) {
+    return function (el, i, arr) {
+      // Return true up front if match by reference
+      return el === fn || fn.call(this, el, i, arr);
+    }
+  }
+
+  function invertedArgsFunctionMatcher(fn) {
+    return function (value, key, obj) {
+      // Return true up front if match by reference
+      return value === fn || fn.call(obj, key, value, obj);
+    }
+  }
+
+  function fuzzyMatcher(obj, isObject) {
+    var matchers = {};
+    return function (el, i, arr) {
+      var key;
+      if(!isObjectType(el)) {
+        return false;
+      }
+      for(key in obj) {
+        matchers[key] = matchers[key] || getMatcher(obj[key], isObject);
+        if(matchers[key].call(arr, el[key], i, arr) === false) {
+          return false;
+        }
+      }
+      return true;
+    }
+  }
+
+  function defaultMatcher(f) {
+    return function (el) {
+      return el === f || isEqual(el, f);
+    }
+  }
+
+  function getMatcher(f, isObject) {
+    if(isPrimitiveType(f)) {
+      // Do nothing and fall through to the
+      // default matcher below.
+    } else if(isRegExp(f)) {
+      // Match against a regexp
+      return regexMatcher(f);
+    } else if(isDate(f)) {
+      // Match against a date. isEqual below should also
+      // catch this but matching directly up front for speed.
+      return dateMatcher(f);
+    } else if(isFunction(f)) {
+      // Match against a filtering function
+      if(isObject) {
+        return invertedArgsFunctionMatcher(f);
+      } else {
+        return functionMatcher(f);
+      }
+    } else if(isPlainObject(f)) {
+      // Match against a fuzzy hash or array.
+      return fuzzyMatcher(f, isObject);
+    }
+    // Default is standard isEqual
+    return defaultMatcher(f);
+  }
+
   function transformArgument(el, map, context, mapArgs) {
-    if(isUndefined(map)) {
+    if(!map) {
       return el;
-    } else if(isFunction(map)) {
+    } else if(map.apply) {
       return map.apply(context, mapArgs || []);
     } else if(isFunction(el[map])) {
       return el[map].call(el);
@@ -894,10 +1161,12 @@
   // Basic array internal methods
 
   function arrayEach(arr, fn, startIndex, loop) {
-    var length, index, i;
+    var index, i, length = +arr.length;
     if(startIndex < 0) startIndex = arr.length + startIndex;
     i = isNaN(startIndex) ? 0 : startIndex;
-    length = loop === true ? arr.length + i : arr.length;
+    if(loop === true) {
+      length += i;
+    }
     while(i < length) {
       index = i % arr.length;
       if(!(index in arr)) {
@@ -930,15 +1199,18 @@
     return i >>> 0;
   }
 
-  function arrayFind(arr, f, startIndex, loop, returnIndex) {
-    var result, index;
-    arrayEach(arr, function(el, i, arr) {
-      if(multiMatch(el, f, arr, [el, i, arr])) {
-        result = el;
-        index = i;
-        return false;
-      }
-    }, startIndex, loop);
+  function arrayFind(arr, f, startIndex, loop, returnIndex, context) {
+    var result, index, matcher;
+    if(arr.length > 0) {
+      matcher = getMatcher(f);
+      arrayEach(arr, function(el, i) {
+        if(matcher.call(context, el, i, arr)) {
+          result = el;
+          index = i;
+          return false;
+        }
+      }, startIndex, loop);
+    }
     return returnIndex ? index : result;
   }
 
@@ -964,7 +1236,7 @@
       // Add the result to the array if:
       // 1. We're subtracting intersections or it doesn't already exist in the result and
       // 2. It exists in the compared array and we're adding, or it doesn't exist and we're removing.
-      if(elementExistsInHash(o, stringified, el, isReference) != subtract) {
+      if(elementExistsInHash(o, stringified, el, isReference) !== subtract) {
         discardElementFromHash(o, stringified, el, isReference);
         result.push(el);
       }
@@ -984,6 +1256,15 @@
       }
     });
     return result;
+  }
+
+  function isArrayLike(obj) {
+    return hasProperty(obj, 'length') && !isString(obj) && !isPlainObject(obj);
+  }
+
+  function isArgumentsObject(obj) {
+    // .callee exists on Arguments objects in < IE8
+    return hasProperty(obj, 'length') && (className(obj) === '[object Arguments]' || !!obj.callee);
   }
 
   function flatArguments(args) {
@@ -1008,7 +1289,7 @@
   function checkForElementInHashAndSet(hash, element) {
     var stringified = stringify(element),
         isReference = !objectIsMatchedByValue(element),
-        exists = elementExistsInHash(hash, stringified, element, isReference);
+        exists      = elementExistsInHash(hash, stringified, element, isReference);
     if(isReference) {
       hash[stringified].push(element);
     } else {
@@ -1036,14 +1317,18 @@
   // Support methods
 
   function getMinOrMax(obj, map, which, all) {
-    var edge,
+    var el,
+        key,
+        edge,
+        test,
         result = [],
         max = which === 'max',
         min = which === 'min',
-        isArray = Array.isArray(obj);
-    iterateOverObject(obj, function(key) {
-      var el   = obj[key],
-          test = transformArgument(el, map, obj, isArray ? [el, parseInt(key), obj] : []);
+        isArray = array.isArray(obj);
+    for(key in obj) {
+      if(!obj.hasOwnProperty(key)) continue;
+      el   = obj[key];
+      test = transformArgument(el, map, obj, isArray ? [el, parseInt(key), obj] : []);
       if(isUndefined(test)) {
         throw new TypeError('Cannot compare with undefined');
       }
@@ -1053,7 +1338,7 @@
         result = [el];
         edge = test;
       }
-    });
+    }
     if(!isArray) result = arrayFlatten(result, 1);
     return all ? result : result[0];
   }
@@ -1063,66 +1348,95 @@
 
   function collateStrings(a, b) {
     var aValue, bValue, aChar, bChar, aEquiv, bEquiv, index = 0, tiebreaker = 0;
-    a = getCollationReadyString(a);
-    b = getCollationReadyString(b);
+
+    var sortIgnore      = array[AlphanumericSortIgnore];
+    var sortIgnoreCase  = array[AlphanumericSortIgnoreCase];
+    var sortEquivalents = array[AlphanumericSortEquivalents];
+    var sortOrder       = array[AlphanumericSortOrder];
+    var naturalSort     = array[AlphanumericSortNatural];
+
+    a = getCollationReadyString(a, sortIgnore, sortIgnoreCase);
+    b = getCollationReadyString(b, sortIgnore, sortIgnoreCase);
+
     do {
-      aChar  = getCollationCharacter(a, index);
-      bChar  = getCollationCharacter(b, index);
-      aValue = getCollationValue(aChar);
-      bValue = getCollationValue(bChar);
+
+      aChar  = getCollationCharacter(a, index, sortEquivalents);
+      bChar  = getCollationCharacter(b, index, sortEquivalents);
+      aValue = getSortOrderIndex(aChar, sortOrder);
+      bValue = getSortOrderIndex(bChar, sortOrder);
+
       if(aValue === -1 || bValue === -1) {
         aValue = a.charCodeAt(index) || null;
         bValue = b.charCodeAt(index) || null;
-      }
-      aEquiv = aChar !== a.charAt(index);
-      bEquiv = bChar !== b.charAt(index);
-      if(aEquiv !== bEquiv && tiebreaker === 0) {
-        tiebreaker = aEquiv - bEquiv;
+        if(naturalSort && codeIsNumeral(aValue) && codeIsNumeral(bValue)) {
+          aValue = stringToNumber(a.slice(index));
+          bValue = stringToNumber(b.slice(index));
+        }
+      } else {
+        aEquiv = aChar !== a.charAt(index);
+        bEquiv = bChar !== b.charAt(index);
+        if(aEquiv !== bEquiv && tiebreaker === 0) {
+          tiebreaker = aEquiv - bEquiv;
+        }
       }
       index += 1;
     } while(aValue != null && bValue != null && aValue === bValue);
     if(aValue === bValue) return tiebreaker;
-    return aValue < bValue ? -1 : 1;
+    return aValue - bValue;
   }
 
-  function getCollationReadyString(str) {
-    if(array[AlphanumericSortIgnoreCase]) {
+  function getCollationReadyString(str, sortIgnore, sortIgnoreCase) {
+    if(!isString(str)) str = string(str);
+    if(sortIgnoreCase) {
       str = str.toLowerCase();
     }
-    return str.replace(array[AlphanumericSortIgnore], '');
+    if(sortIgnore) {
+      str = str.replace(sortIgnore, '');
+    }
+    return str;
   }
 
-  function getCollationCharacter(str, index) {
-    var chr = str.charAt(index), eq = array[AlphanumericSortEquivalents] || {};
-    return eq[chr] || chr;
+  function getCollationCharacter(str, index, sortEquivalents) {
+    var chr = str.charAt(index);
+    return sortEquivalents[chr] || chr;
   }
 
-  function getCollationValue(chr) {
-    var order = array[AlphanumericSortOrder];
+  function getSortOrderIndex(chr, sortOrder) {
     if(!chr) {
       return null;
     } else {
-      return order.indexOf(chr);
+      return sortOrder.indexOf(chr);
     }
   }
 
+  var AlphanumericSort            = 'AlphanumericSort';
   var AlphanumericSortOrder       = 'AlphanumericSortOrder';
   var AlphanumericSortIgnore      = 'AlphanumericSortIgnore';
   var AlphanumericSortIgnoreCase  = 'AlphanumericSortIgnoreCase';
   var AlphanumericSortEquivalents = 'AlphanumericSortEquivalents';
+  var AlphanumericSortNatural     = 'AlphanumericSortNatural';
 
 
 
   function buildEnhancements() {
-    var callbackCheck = function() { var a = arguments; return a.length > 0 && !isFunction(a[0]); };
-    extendSimilar(array, true, callbackCheck, 'map,every,all,some,any,none,filter', function(methods, name) {
+    var nativeMap = array.prototype.map;
+    var callbackCheck = function() {
+      var args = arguments;
+      return args.length > 0 && !isFunction(args[0]);
+    };
+    extendSimilar(array, true, callbackCheck, 'every,all,some,filter,any,none,find,findIndex', function(methods, name) {
+      var nativeFn = array.prototype[name]
       methods[name] = function(f) {
-        return this[name](function(el, index) {
-          if(name === 'map') {
-            return transformArgument(el, f, this, [el, index, this]);
-          } else {
-            return multiMatch(el, f, this, [el, index, this]);
-          }
+        var matcher = getMatcher(f);
+        return nativeFn.call(this, function(el, index) {
+          return matcher(el, index, this);
+        });
+      }
+    });
+    extend(array, true, callbackCheck, {
+      'map': function(f) {
+        return nativeMap.call(this, function(el, index) {
+          return transformArgument(el, f, this, [el, index, this]);
         });
       }
     });
@@ -1142,11 +1456,12 @@
         equivalents[chr.toLowerCase()] = equivalent.toLowerCase();
       });
     });
+    array[AlphanumericSortNatural] = true;
     array[AlphanumericSortIgnoreCase] = true;
     array[AlphanumericSortEquivalents] = equivalents;
   }
 
-  extend(array, false, false, {
+  extend(array, false, true, {
 
     /***
      *
@@ -1164,15 +1479,10 @@
      *
      ***/
     'create': function() {
-      var result = [], tmp;
+      var result = [];
       multiArgs(arguments, function(a) {
-        if(isObjectPrimitive(a)) {
-          try {
-            tmp = array.prototype.slice.call(a, 0);
-            if(tmp.length > 0) {
-              a = tmp;
-            }
-          } catch(e) {};
+        if(isArgumentsObject(a) || isArrayLike(a)) {
+          a = array.prototype.slice.call(a, 0);
         }
         result = result.concat(a);
       });
@@ -1184,20 +1494,76 @@
   extend(array, true, false, {
 
     /***
-     * @method find(<f>, [index] = 0, [loop] = false)
+     * @method find(<f>, [context] = undefined)
      * @returns Mixed
      * @short Returns the first element that matches <f>.
-     * @extra <f> will match a string, number, array, object, or alternately test against a function or regex. Starts at [index], and will continue once from index = 0 if [loop] is true. This method implements @array_matching.
+     * @extra [context] is the %this% object if passed. When <f> is a function, will use native implementation if it exists. <f> will also match a string, number, array, object, or alternately test against a function or regex. This method implements @array_matching.
      * @example
      *
      +   [{a:1,b:2},{a:1,b:3},{a:1,b:4}].find(function(n) {
      *     return n['a'] == 1;
-     *   });                                     -> {a:1,b:3}
-     *   ['cuba','japan','canada'].find(/^c/, 2) -> 'canada'
+     *   });                                  -> {a:1,b:3}
+     *   ['cuba','japan','canada'].find(/^c/) -> 'cuba'
      *
      ***/
-    'find': function(f, index, loop) {
+    'find': function(f, context) {
+      checkCallback(f);
+      return arrayFind(this, f, 0, false, false, context);
+    },
+
+    /***
+     * @method findIndex(<f>, [context] = undefined)
+     * @returns Number
+     * @short Returns the index of the first element that matches <f> or -1 if not found.
+     * @extra [context] is the %this% object if passed. When <f> is a function, will use native implementation if it exists. <f> will also match a string, number, array, object, or alternately test against a function or regex. This method implements @array_matching.
+     *
+     * @example
+     *
+     +   [1,2,3,4].findIndex(function(n) {
+     *     return n % 2 == 0;
+     *   }); -> 1
+     +   [1,2,3,4].findIndex(3);               -> 2
+     +   ['one','two','three'].findIndex(/t/); -> 1
+     *
+     ***/
+    'findIndex': function(f, context) {
+      var index;
+      checkCallback(f);
+      index = arrayFind(this, f, 0, false, true, context);
+      return isUndefined(index) ? -1 : index;
+    }
+
+  });
+
+  extend(array, true, true, {
+
+    /***
+     * @method findFrom(<f>, [index] = 0, [loop] = false)
+     * @returns Array
+     * @short Returns any element that matches <f>, beginning from [index].
+     * @extra <f> will match a string, number, array, object, or alternately test against a function or regex. Will continue from index = 0 if [loop] is true. This method implements @array_matching.
+     * @example
+     *
+     *   ['cuba','japan','canada'].findFrom(/^c/, 2) -> 'canada'
+     *
+     ***/
+    'findFrom': function(f, index, loop) {
       return arrayFind(this, f, index, loop);
+    },
+
+    /***
+     * @method findIndexFrom(<f>, [index] = 0, [loop] = false)
+     * @returns Array
+     * @short Returns the index of any element that matches <f>, beginning from [index].
+     * @extra <f> will match a string, number, array, object, or alternately test against a function or regex. Will continue from index = 0 if [loop] is true. This method implements @array_matching.
+     * @example
+     *
+     *   ['cuba','japan','canada'].findIndexFrom(/^c/, 2) -> 2
+     *
+     ***/
+    'findIndexFrom': function(f, index, loop) {
+      var index = arrayFind(this, f, index, loop, true);
+      return isUndefined(index) ? -1 : index;
     },
 
     /***
@@ -1215,32 +1581,16 @@
      *
      ***/
     'findAll': function(f, index, loop) {
-      var result = [];
-      arrayEach(this, function(el, i, arr) {
-        if(multiMatch(el, f, arr, [el, i, arr])) {
-          result.push(el);
-        }
-      }, index, loop);
+      var result = [], matcher;
+      if(this.length > 0) {
+        matcher = getMatcher(f);
+        arrayEach(this, function(el, i, arr) {
+          if(matcher(el, i, arr)) {
+            result.push(el);
+          }
+        }, index, loop);
+      }
       return result;
-    },
-
-    /***
-     * @method findIndex(<f>, [startIndex] = 0, [loop] = false)
-     * @returns Number
-     * @short Returns the index of the first element that matches <f> or -1 if not found.
-     * @extra This method has a few notable differences to native %indexOf%. Although <f> will similarly match a primitive such as a string or number, it will also match deep objects and arrays that are not equal by reference (%===%). Additionally, if a function is passed it will be run as a matching function (similar to the behavior of %Array#filter%) rather than attempting to find that function itself by reference in the array. Starts at [index], and will continue once from index = 0 if [loop] is true. This method implements @array_matching.
-     * @example
-     *
-     +   [1,2,3,4].findIndex(3);  -> 2
-     +   [1,2,3,4].findIndex(function(n) {
-     *     return n % 2 == 0;
-     *   }); -> 1
-     +   ['one','two','three'].findIndex(/th/); -> 2
-     *
-     ***/
-    'findIndex': function(f, startIndex, loop) {
-      var index = arrayFind(this, f, startIndex, loop, true);
-      return isUndefined(index) ? -1 : index;
     },
 
     /***
@@ -1274,10 +1624,8 @@
      ***/
     'removeAt': function(start, end) {
       if(isUndefined(start)) return this;
-      if(isUndefined(end)) end = start;
-      for(var i = 0; i <= (end - start); i++) {
-        this.splice(start, 1);
-      }
+      if(isUndefined(end))   end = start;
+      this.splice(start, end - start + 1);
       return this;
     },
 
@@ -1424,7 +1772,7 @@
      *
      ***/
     'at': function() {
-      return entryAtIndex(this, arguments);
+      return getEntriesForIndexes(this, arguments);
     },
 
     /***
@@ -1589,7 +1937,7 @@
     /***
      * @method average([map])
      * @returns Number
-     * @short Averages all values in the array.
+     * @short Gets the mean average for all values in the array.
      * @extra [map] may be a function mapping the value to be averaged or a string acting as a shortcut.
      * @example
      *
@@ -1621,11 +1969,11 @@
       var arr = this;
       var result = [];
       var divisor = ceil(this.length / num);
-      getRange(0, num - 1, function(i) {
+      simpleRepeat(num, function(i) {
         var index = i * divisor;
         var group = arr.slice(index, index + divisor);
         if(pad && group.length < divisor) {
-          getRange(1, divisor - group.length, function() {
+          simpleRepeat(divisor - group.length, function() {
             group = group.add(padding);
           });
         }
@@ -1650,7 +1998,7 @@
       if(len === 0 || num === 0) return arr;
       if(isUndefined(num)) num = 1;
       if(isUndefined(padding)) padding = null;
-      getRange(0, ceil(len / num) - 1, function(i) {
+      simpleRepeat(ceil(len / num), function(i) {
         group = arr.slice(num * i, num * i + num);
         while(group.length < num) {
           group.push(padding);
@@ -1720,9 +2068,14 @@
      *
      ***/
     'randomize': function() {
-      var a = this.concat();
-      for(var j, x, i = a.length; i; j = parseInt(math.random() * i), x = a[--i], a[i] = a[j], a[j] = x) {};
-      return a;
+      var arr = this.concat(), i = arr.length, j, x;
+      while(i) {
+        j = (math.random() * i) | 0;
+        x = arr[--i];
+        arr[i] = arr[j];
+        arr[j] = x;
+      }
+      return arr;
     },
 
     /***
@@ -1814,11 +2167,11 @@
      *
      ***/
     'remove': function() {
-      var i, arr = this;
+      var arr = this;
       multiArgs(arguments, function(f) {
-        i = 0;
+        var i = 0, matcher = getMatcher(f);
         while(i < arr.length) {
-          if(multiMatch(arr[i], f, arr, [arr[i], i, arr])) {
+          if(matcher(arr[i], i, arr)) {
             arr.splice(i, 1);
           } else {
             i++;
@@ -1901,8 +2254,10 @@
 
   });
 
+
   // Aliases
-  extend(array, true, false, {
+
+  extend(array, true, true, {
 
     /***
      * @method all()
@@ -1933,11 +2288,8 @@
    *
    ***/
 
-   function keysWithCoercion(obj) {
-     if(obj && obj.valueOf) {
-       obj = obj.valueOf();
-     }
-     return object.keys(obj);
+   function keysWithObjectCoercion(obj) {
+     return object.keys(coercePrimitiveToObject(obj));
    }
 
   /***
@@ -1974,15 +2326,18 @@
    ***/
 
   function buildEnumerableMethods(names, mapping) {
-    extendSimilar(object, false, false, names, function(methods, name) {
+    extendSimilar(object, false, true, names, function(methods, name) {
       methods[name] = function(obj, arg1, arg2) {
-        var result;
-        var x =  keysWithCoercion(obj);
-        result = array.prototype[name].call(x, function(key) {
+        var result, coerced = keysWithObjectCoercion(obj), matcher;
+        if(!mapping) {
+          matcher = getMatcher(arg1, true);
+        }
+        result = array.prototype[name].call(coerced, function(key) {
+          var value = obj[key];
           if(mapping) {
-            return transformArgument(obj[key], arg1, obj, [key, obj[key], obj]);
+            return transformArgument(value, arg1, obj, [key, value, obj]);
           } else {
-            return multiMatch(obj[key], arg1, obj, [key, obj[key], obj]);
+            return matcher(value, key, obj);
           }
         }, arg2);
         if(isArray(result)) {
@@ -1999,20 +2354,27 @@
     buildObjectInstanceMethods(names, Hash);
   }
 
-  extend(object, false, false, {
+  function exportSortAlgorithm() {
+    array[AlphanumericSort] = collateStrings;
+  }
+
+  extend(object, false, true, {
 
     'map': function(obj, map) {
-      return keysWithCoercion(obj).reduce(function(result, key) {
-        result[key] = transformArgument(obj[key], map, obj, [key, obj[key], obj]);
-        return result;
-      }, {});
+      var result = {}, key, value;
+      for(key in obj) {
+        if(!hasOwnProperty(obj, key)) continue;
+        value = obj[key];
+        result[key] = transformArgument(value, map, obj, [key, value, obj]);
+      }
+      return result;
     },
 
     'reduce': function(obj) {
-      var values = keysWithCoercion(obj).map(function(key) {
+      var values = keysWithObjectCoercion(obj).map(function(key) {
         return obj[key];
       });
-      return values.reduce.apply(values, multiArgs(arguments).slice(1));
+      return values.reduce.apply(values, multiArgs(arguments, null, 1));
     },
 
     'each': function(obj, fn) {
@@ -2032,7 +2394,7 @@
      *
      ***/
     'size': function (obj) {
-      return keysWithCoercion(obj).length;
+      return keysWithObjectCoercion(obj).length;
     }
 
   });
@@ -2047,6 +2409,7 @@
   buildEnumerableMethods(EnumerableFindingMethods);
   buildEnumerableMethods(EnumerableMappingMethods, true);
   buildObjectInstanceMethods(EnumerableOtherMethods, Hash);
+  exportSortAlgorithm();
 
 
   /***
@@ -2065,122 +2428,51 @@
   var SixtyReg   = '[0-5]\\d' + DecimalReg;
   var RequiredTime = '({t})?\\s*('+HoursReg+')(?:{h}('+SixtyReg+')?{m}(?::?('+SixtyReg+'){s})?\\s*(?:({t})|(Z)|(?:([+-])(\\d{2,2})(?::?(\\d{2,2}))?)?)?|\\s*({t}))';
 
-  var KanjiDigits     = '〇一二三四五六七八九十百千万';
-  var FullWidthDigits = '０１２３４５６７８９';
+  var KanjiDigits = '〇一二三四五六七八九十百千万';
   var AsianDigitMap = {};
   var AsianDigitReg;
 
   var DateArgumentUnits;
   var DateUnitsReversed;
   var CoreDateFormats = [];
+  var CompiledOutputFormats = {};
 
-  var DateOutputFormats = [
-    {
-      token: 'f{1,4}|ms|milliseconds',
-      format: function(d) {
-        return callDateGet(d, 'Milliseconds');
-      }
+  var DateFormatTokens = {
+
+    'yyyy': function(d) {
+      return callDateGet(d, 'FullYear');
     },
-    {
-      token: 'ss?|seconds',
-      format: function(d, len) {
-        return callDateGet(d, 'Seconds');
-      }
+
+    'yy': function(d) {
+      return callDateGet(d, 'FullYear') % 100;
     },
-    {
-      token: 'mm?|minutes',
-      format: function(d, len) {
-        return callDateGet(d, 'Minutes');
-      }
+
+    'ord': function(d) {
+      var date = callDateGet(d, 'Date');
+      return date + getOrdinalizedSuffix(date);
     },
-    {
-      token: 'hh?|hours|12hr',
-      format: function(d) {
-        return getShortHour(d);
-      }
+
+    'tz': function(d) {
+      return d.getUTCOffset();
     },
-    {
-      token: 'HH?|24hr',
-      format: function(d) {
-        return callDateGet(d, 'Hours');
-      }
+
+    'isotz': function(d) {
+      return d.getUTCOffset(true);
     },
-    {
-      token: 'dd?|date|day',
-      format: function(d) {
-        return callDateGet(d, 'Date');
-      }
+
+    'Z': function(d) {
+      return d.getUTCOffset();
     },
-    {
-      token: 'dow|weekday',
-      word: true,
-      format: function(d, loc, n, t) {
-        var dow = callDateGet(d, 'Day');
-        return loc['weekdays'][dow + (n - 1) * 7];
-      }
-    },
-    {
-      token: 'MM?',
-      format: function(d) {
-        return callDateGet(d, 'Month') + 1;
-      }
-    },
-    {
-      token: 'mon|month',
-      word: true,
-      format: function(d, loc, n, len) {
-        var month = callDateGet(d, 'Month');
-        return loc['months'][month + (n - 1) * 12];
-      }
-    },
-    {
-      token: 'y{2,4}|year',
-      format: function(d) {
-        return callDateGet(d, 'FullYear');
-      }
-    },
-    {
-      token: '[Tt]{1,2}',
-      format: function(d, loc, n, format) {
-        if(loc['ampm'].length == 0) return '';
-        var hours = callDateGet(d, 'Hours');
-        var str = loc['ampm'][floor(hours / 12)];
-        if(format.length === 1) str = str.slice(0,1);
-        if(format.slice(0,1) === 'T') str = str.toUpperCase();
-        return str;
-      }
-    },
-    {
-      token: 'z{1,4}|tz|timezone',
-      text: true,
-      format: function(d, loc, n, format) {
-        var tz = d.getUTCOffset();
-        if(format == 'z' || format == 'zz') {
-          tz = tz.replace(/(\d{2})(\d{2})/, function(f,h,m) {
-            return padNumber(h, format.length);
-          });
-        }
-        return tz;
-      }
-    },
-    {
-      token: 'iso(tz|timezone)',
-      format: function(d) {
-        return d.getUTCOffset(true);
-      }
-    },
-    {
-      token: 'ord',
-      format: function(d) {
-        var date = callDateGet(d, 'Date');
-        return date + getOrdinalizedSuffix(date);
-      }
+
+    'ZZ': function(d) {
+      return d.getUTCOffset().replace(/(\d{2})$/, ':$1');
     }
-  ];
+
+  };
 
   var DateUnits = [
     {
-      unit: 'year',
+      name: 'year',
       method: 'FullYear',
       ambiguous: true,
       multiplier: function(d) {
@@ -2189,7 +2481,8 @@
       }
     },
     {
-      unit: 'month',
+      name: 'month',
+      error: 0.919, // Feb 1-28 over 1 month
       method: 'Month',
       ambiguous: true,
       multiplier: function(d, ms) {
@@ -2201,18 +2494,18 @@
           }
         }
         return days * 24 * 60 * 60 * 1000;
-      },
-      error: 0.919
+      }
     },
     {
-      unit: 'week',
-      method: 'Week',
+      name: 'week',
+      method: 'ISOWeek',
       multiplier: function() {
         return 7 * 24 * 60 * 60 * 1000;
       }
     },
     {
-      unit: 'day',
+      name: 'day',
+      error: 0.958, // DST traversal over 1 day
       method: 'Date',
       ambiguous: true,
       multiplier: function() {
@@ -2220,28 +2513,28 @@
       }
     },
     {
-      unit: 'hour',
+      name: 'hour',
       method: 'Hours',
       multiplier: function() {
         return 60 * 60 * 1000;
       }
     },
     {
-      unit: 'minute',
+      name: 'minute',
       method: 'Minutes',
       multiplier: function() {
         return 60 * 1000;
       }
     },
     {
-      unit: 'second',
+      name: 'second',
       method: 'Seconds',
       multiplier: function() {
         return 1000;
       }
     },
     {
-      unit: 'millisecond',
+      name: 'millisecond',
       method: 'Milliseconds',
       multiplier: function() {
         return 1;
@@ -2296,8 +2589,8 @@
       });
     },
 
-    getEnglishUnit: function(n) {
-      return English['units'][this['units'].indexOf(n) % 8];
+    getUnitIndex: function(n) {
+      return this['units'].indexOf(n) % 8;
     },
 
     getRelativeFormat: function(adu) {
@@ -2350,7 +2643,7 @@
     addFormat: function(src, allowsTime, match, variant, iso) {
       var to = match || [], loc = this, time, timeMarkers, lastIsNumeral;
 
-      src = src.replace(/\s+/g, '[-,. ]*');
+      src = src.replace(/\s+/g, '[,. ]*');
       src = src.replace(/\{([^,]+?)\}/g, function(all, k) {
         var value, arr, result,
             opt   = k.match(/\?$/),
@@ -2411,7 +2704,7 @@
     if(!isString(localeCode)) localeCode = '';
     loc = Localizations[localeCode] || Localizations[localeCode.slice(0,2)];
     if(fallback === false && !loc) {
-      throw new Error('Invalid locale.');
+      throw new TypeError('Invalid locale.');
     }
     return loc || CurrentLocalization;
   }
@@ -2459,7 +2752,7 @@
     }
 
     function getNum() {
-      var arr = ['\\d+'].concat(loc['articles']);
+      var arr = ['-?\\d+'].concat(loc['articles']);
       if(loc['numbers']) arr = arr.concat(loc['numbers']);
       return arrayToAlternates(arr);
     }
@@ -2471,6 +2764,9 @@
     function setModifiers() {
       var arr = [];
       loc.modifiersByName = {};
+      loc['modifiers'].push({ 'name': 'day', 'src': 'yesterday', 'value': -1 });
+      loc['modifiers'].push({ 'name': 'day', 'src': 'today', 'value': 0 });
+      loc['modifiers'].push({ 'name': 'day', 'src': 'tomorrow', 'value': 1 });
       loc['modifiers'].forEach(function(modifier) {
         var name = modifier.name;
         eachAlternate(modifier.src, function(t) {
@@ -2505,7 +2801,7 @@
 
     if(loc['monthSuffix']) {
       loc['month'] = getDigit(1,2);
-      loc['months'] = getRange(1, 12).map(function(n) { return n + loc['monthSuffix']; });
+      loc['months'] = '1,2,3,4,5,6,7,8,9,10,11,12'.split(',').map(function(n) { return n + loc['monthSuffix']; });
     }
     loc['full_month'] = getDigit(1,2) + '|' + arrayToAlternates(loc['months']);
 
@@ -2557,11 +2853,16 @@
     }).join('|');
   }
 
+  function getNewDate() {
+    var fn = date.SugarNewDate;
+    return fn ? fn() : new date;
+  }
+
   // Date argument helpers
 
   function collectDateArguments(args, allowDuration) {
-    var obj, arr;
-    if(isObject(args[0])) {
+    var obj;
+    if(isObjectType(args[0])) {
       return args;
     } else if (isNumber(args[0]) && !isNumber(args[1])) {
       return [args[0]];
@@ -2570,13 +2871,13 @@
     }
     obj = {};
     DateArgumentUnits.forEach(function(u,i) {
-      obj[u.unit] = args[i];
+      obj[u.name] = args[i];
     });
     return [obj];
   }
 
   function getDateParamsFromString(str, num) {
-    var params = {};
+    var match, params = {};
     match = str.match(/^(\d+)?\s?(\w+?)s?$/i);
     if(match) {
       if(isUndefined(num)) {
@@ -2585,6 +2886,19 @@
       params[match[2].toLowerCase()] = num;
     }
     return params;
+  }
+
+  // Date iteration helpers
+
+  function iterateOverDateUnits(fn, from, to) {
+    var i, unit;
+    if(isUndefined(to)) to = DateUnitsReversed.length;
+    for(i = from || 0; i < to; i++) {
+      unit = DateUnitsReversed[i];
+      if(fn(unit.name, unit, i) === false) {
+        break;
+      }
+    }
   }
 
   // Date parsing helpers
@@ -2604,7 +2918,7 @@
   }
 
   function cleanDateInput(str) {
-    str = str.trim().replace(/^(just )?now|\.+$/i, '');
+    str = str.trim().replace(/^just (?=now)|\.+$/i, '');
     return convertAsianDigits(str);
   }
 
@@ -2632,7 +2946,66 @@
   }
 
   function getExtendedDate(f, localeCode, prefer, forceUTC) {
-    var d = new date(), relative = false, baseLocalization, loc, format, set, unit, weekday, num, tmp, after;
+    var d, relative, baseLocalization, afterCallbacks, loc, set, unit, unitIndex, weekday, num, tmp;
+
+    d = getNewDate();
+    afterCallbacks = [];
+
+    function afterDateSet(fn) {
+      afterCallbacks.push(fn);
+    }
+
+    function fireCallbacks() {
+      afterCallbacks.forEach(function(fn) {
+        fn.call();
+      });
+    }
+
+    function setWeekdayOfMonth() {
+      var w = d.getWeekday();
+      d.setWeekday((7 * (set['num'] - 1)) + (w > weekday ? weekday + 7 : weekday));
+    }
+
+    function setUnitEdge() {
+      var modifier = loc.modifiersByName[set['edge']];
+      iterateOverDateUnits(function(name) {
+        if(isDefined(set[name])) {
+          unit = name;
+          return false;
+        }
+      }, 4);
+      if(unit === 'year') set.specificity = 'month';
+      else if(unit === 'month' || unit === 'week') set.specificity = 'day';
+      d[(modifier.value < 0 ? 'endOf' : 'beginningOf') + simpleCapitalize(unit)]();
+      // This value of -2 is arbitrary but it's a nice clean way to hook into this system.
+      if(modifier.value === -2) d.reset();
+    }
+
+    function separateAbsoluteUnits() {
+      var params;
+      iterateOverDateUnits(function(name, u, i) {
+        if(name === 'day') name = 'date';
+        if(isDefined(set[name])) {
+          // If there is a time unit set that is more specific than
+          // the matched unit we have a string like "5:30am in 2 minutes",
+          // which is meaningless, so invalidate the date...
+          if(i >= unitIndex) {
+            invalidateDate(d);
+            return false;
+          }
+          // ...otherwise set the params to set the absolute date
+          // as a callback after the relative date has been set.
+          params = params || {};
+          params[name] = set[name];
+          delete set[name];
+        }
+      });
+      if(params) {
+        afterDateSet(function() {
+          d.set(params, true);
+        });
+      }
+    }
 
     d.utc(forceUTC);
 
@@ -2642,7 +3015,7 @@
       d.utc(f.isUTC()).setTime(f.getTime());
     } else if(isNumber(f)) {
       d.setTime(f);
-    } else if(isObject(f)) {
+    } else if(isObjectType(f)) {
       d.set(f, true);
       set = f;
     } else if(isString(f)) {
@@ -2658,15 +3031,15 @@
         iterateOverObject(baseLocalization.getFormats(), function(i, dif) {
           var match = f.match(dif.reg);
           if(match) {
-            format = dif;
-            loc = format.locale;
-            set = getFormatMatch(match, format.to, loc);
+
+            loc = dif.locale;
+            set = getFormatMatch(match, dif.to, loc);
+            loc.cachedFormat = dif;
+
 
             if(set['utc']) {
               d.utc();
             }
-
-            loc.cachedFormat = format;
 
             if(set.timestamp) {
               set = set.timestamp;
@@ -2674,7 +3047,7 @@
             }
 
             // If there's a variant (crazy Endian American format), swap the month and day.
-            if(format.variant && !isString(set['month']) && (isString(set['date']) || baseLocalization.hasVariant(localeCode))) {
+            if(dif.variant && !isString(set['month']) && (isString(set['date']) || baseLocalization.hasVariant(localeCode))) {
               tmp = set['month'];
               set['month'] = set['date'];
               set['date']  = tmp;
@@ -2710,13 +3083,10 @@
               delete set['day'];
               if(set['num'] && set['month']) {
                 // If we have "the 2nd tuesday of June", set the day to the beginning of the month, then
-                // look ahead to set the weekday after all other properties have been set. The weekday needs
-                // to be set after the actual set because it requires overriding the "prefer" argument which
+                // set the weekday after all other properties have been set. The weekday needs to be set
+                // after the actual set because it requires overriding the "prefer" argument which
                 // could unintentionally send the year into the future, past, etc.
-                after = function() {
-                  var w = d.getWeekday();
-                  d.setWeekday((7 * (set['num'] - 1)) + (w > weekday ? weekday + 7 : weekday));
-                }
+                afterDateSet(setWeekdayOfMonth);
                 set['day'] = 1;
               } else {
                 set['weekday'] = weekday;
@@ -2747,27 +3117,22 @@
 
             // Date has a unit like "days", "months", etc. are all relative to the current date.
             if(set['unit']) {
-              relative = true;
-              num = loc.getNumber(set['num']);
-              unit = loc.getEnglishUnit(set['unit']);
+              relative  = true;
+              num       = loc.getNumber(set['num']);
+              unitIndex = loc.getUnitIndex(set['unit']);
+              unit      = English['units'][unitIndex];
+
+              // Formats like "the 15th of last month" or "6:30pm of next week"
+              // contain absolute units in addition to relative ones, so separate
+              // them here, remove them from the params, and set up a callback to
+              // set them after the relative ones have been set.
+              separateAbsoluteUnits();
 
               // Shift and unit, ie "next month", "last week", etc.
-              if(set['shift'] || set['edge']) {
+              if(set['shift']) {
                 num *= (tmp = loc.modifiersByName[set['shift']]) ? tmp.value : 0;
-
-                // Relative month and static date: "the 15th of last month"
-                if(unit === 'month' && isDefined(set['date'])) {
-                  d.set({ 'day': set['date'] }, true);
-                  delete set['date'];
-                }
-
-                // Relative year and static month/date: "June 15th of last year"
-                if(unit === 'year' && isDefined(set['month'])) {
-                  d.set({ 'month': set['month'], 'day': set['date'] }, true);
-                  delete set['month'];
-                  delete set['date'];
-                }
               }
+
               // Unit and sign, ie "months ago", "weeks from now", etc.
               if(set['sign'] && (tmp = loc.modifiersByName[set['sign']])) {
                 num *= tmp.value;
@@ -2783,29 +3148,37 @@
               set[unit] = (set[unit] || 0) + num;
             }
 
+            // If there is an "edge" it needs to be set after the
+            // other fields are set. ie "the end of February"
+            if(set['edge']) {
+              afterDateSet(setUnitEdge);
+            }
+
             if(set['year_sign'] === '-') {
               set['year'] *= -1;
             }
 
-            DateUnitsReversed.slice(1,4).forEach(function(u, i) {
-              var value = set[u.unit], fraction = value % 1;
+            iterateOverDateUnits(function(name, unit, i) {
+              var value = set[name], fraction = value % 1;
               if(fraction) {
-                set[DateUnitsReversed[i].unit] = round(fraction * (u.unit === 'second' ? 1000 : 60));
-                set[u.unit] = floor(value);
+                set[DateUnitsReversed[i - 1].name] = round(fraction * (name === 'second' ? 1000 : 60));
+                set[name] = floor(value);
               }
-            });
+            }, 1, 4);
             return false;
           }
         });
       }
-      if(!format) {
+      if(!set) {
         // The Date constructor does something tricky like checking the number
         // of arguments so simply passing in undefined won't work.
-        d = f ? new date(f) : new date();
+        if(f !== 'now') {
+          d = new date(f);
+        }
         if(forceUTC) {
           // Falling back to system date here which cannot be parsed as UTC,
           // so if we're forcing UTC then simply add the offset.
-          d.addMinutes(d.getTimezoneOffset());
+          d.addMinutes(-d.getTimezoneOffset());
         }
       } else if(relative) {
         d.advance(set);
@@ -2817,26 +3190,7 @@
         }
         updateDate(d, set, true, false, prefer);
       }
-
-      // If there is an "edge" it needs to be set after the
-      // other fields are set. ie "the end of February"
-      if(set && set['edge']) {
-        tmp = loc.modifiersByName[set['edge']];
-        iterateOverObject(DateUnitsReversed.slice(4), function(i, u) {
-          if(isDefined(set[u.unit])) {
-            unit = u.unit;
-            return false;
-          }
-        });
-        if(unit === 'year') set.specificity = 'month';
-        else if(unit === 'month' || unit === 'week') set.specificity = 'day';
-        d[(tmp.value < 0 ? 'endOf' : 'beginningOf') + simpleCapitalize(unit)]();
-        // This value of -2 is arbitrary but it's a nice clean way to hook into this system.
-        if(tmp.value === -2) d.reset();
-      }
-      if(after) {
-        after();
-      }
+      fireCallbacks();
       // A date created by parsing a string presumes that the format *itself* is UTC, but
       // not that the date, once created, should be manipulated as such. In other words,
       // if you are creating a date object from a server time "2012-11-15T12:00:00Z",
@@ -2852,7 +3206,7 @@
 
   // If the year is two digits, add the most appropriate century prefix.
   function getYearFromAbbreviation(year) {
-    return round(callDateGet(new date(), 'FullYear') / 100) * 100 - round(year / 100) * 100 + year;
+    return round(callDateGet(getNewDate(), 'FullYear') / 100) * 100 - round(year / 100) * 100 + year;
   }
 
   function getShortHour(d) {
@@ -2869,64 +3223,167 @@
   }
 
   function getAdjustedUnit(ms) {
-    var next, ams = math.abs(ms), value = ams, unit = 0;
-    DateUnitsReversed.slice(1).forEach(function(u, i) {
-      next = floor(round(ams / u.multiplier() * 10) / 10);
+    var next, ams = abs(ms), value = ams, unitIndex = 0;
+    iterateOverDateUnits(function(name, unit, i) {
+      next = floor(withPrecision(ams / unit.multiplier(), 1));
       if(next >= 1) {
         value = next;
-        unit = i + 1;
+        unitIndex = i;
       }
-    });
-    return [value, unit, ms];
+    }, 1);
+    return [value, unitIndex, ms];
+  }
+
+  function getRelativeWithMonthFallback(date) {
+    var adu = getAdjustedUnit(date.millisecondsFromNow());
+    if(allowMonthFallback(date, adu)) {
+      // If the adjusted unit is in months, then better to use
+      // the "monthsfromNow" which applies a special error margin
+      // for edge cases such as Jan-09 - Mar-09 being less than
+      // 2 months apart (when using a strict numeric definition).
+      // The third "ms" element in the array will handle the sign
+      // (past or future), so simply take the absolute value here.
+      adu[0] = abs(date.monthsFromNow());
+      adu[1] = 6;
+    }
+    return adu;
+  }
+
+  function allowMonthFallback(date, adu) {
+    // Allow falling back to monthsFromNow if the unit is in months...
+    return adu[1] === 6 ||
+    // ...or if it's === 4 weeks and there are more days than in the given month
+    (adu[1] === 5 && adu[0] === 4 && date.daysFromNow() >= getNewDate().daysInMonth());
+  }
+
+
+  // Date format token helpers
+
+  function createMeridianTokens(slice, caps) {
+    var fn = function(d, localeCode) {
+      var hours = callDateGet(d, 'Hours');
+      return getLocalization(localeCode)['ampm'][floor(hours / 12)] || '';
+    }
+    createFormatToken('t', fn, 1);
+    createFormatToken('tt', fn);
+    createFormatToken('T', fn, 1, 1);
+    createFormatToken('TT', fn, null, 2);
+  }
+
+  function createWeekdayTokens(slice, caps) {
+    var fn = function(d, localeCode) {
+      var dow = callDateGet(d, 'Day');
+      return getLocalization(localeCode)['weekdays'][dow];
+    }
+    createFormatToken('dow', fn, 3);
+    createFormatToken('Dow', fn, 3, 1);
+    createFormatToken('weekday', fn);
+    createFormatToken('Weekday', fn, null, 1);
+  }
+
+  function createMonthTokens(slice, caps) {
+    createMonthToken('mon', 0, 3);
+    createMonthToken('month', 0);
+
+    // For inflected month forms, namely Russian.
+    createMonthToken('month2', 1);
+    createMonthToken('month3', 2);
+  }
+
+  function createMonthToken(token, multiplier, slice) {
+    var fn = function(d, localeCode) {
+      var month = callDateGet(d, 'Month');
+      return getLocalization(localeCode)['months'][month + (multiplier * 12)];
+    };
+    createFormatToken(token, fn, slice);
+    createFormatToken(simpleCapitalize(token), fn, slice, 1);
+  }
+
+  function createFormatToken(t, fn, slice, caps) {
+    DateFormatTokens[t] = function(d, localeCode) {
+      var str = fn(d, localeCode);
+      if(slice) str = str.slice(0, slice);
+      if(caps)  str = str.slice(0, caps).toUpperCase() + str.slice(caps);
+      return str;
+    }
+  }
+
+  function createPaddedToken(t, fn, ms) {
+    DateFormatTokens[t] = fn;
+    DateFormatTokens[t + t] = function (d, localeCode) {
+      return padNumber(fn(d, localeCode), 2);
+    };
+    if(ms) {
+      DateFormatTokens[t + t + t] = function (d, localeCode) {
+        return padNumber(fn(d, localeCode), 3);
+      };
+      DateFormatTokens[t + t + t + t] = function (d, localeCode) {
+        return padNumber(fn(d, localeCode), 4);
+      };
+    }
   }
 
 
   // Date formatting helpers
 
+  function buildCompiledOutputFormat(format) {
+    var match = format.match(/(\{\w+\})|[^{}]+/g);
+    CompiledOutputFormats[format] = match.map(function(p) {
+      p.replace(/\{(\w+)\}/, function(full, token) {
+        p = DateFormatTokens[token] || token;
+        return token;
+      });
+      return p;
+    });
+  }
+
+  function executeCompiledOutputFormat(date, format, localeCode) {
+    var compiledFormat, length, i, t, result = '';
+    compiledFormat = CompiledOutputFormats[format];
+    for(i = 0, length = compiledFormat.length; i < length; i++) {
+      t = compiledFormat[i];
+      result += isFunction(t) ? t(date, localeCode) : t;
+    }
+    return result;
+  }
+
   function formatDate(date, format, relative, localeCode) {
-    var adu, loc = getLocalization(localeCode), caps = regexp(/^[A-Z]/), value, shortcut;
+    var adu;
     if(!date.isValid()) {
       return 'Invalid Date';
     } else if(Date[format]) {
       format = Date[format];
     } else if(isFunction(format)) {
-      adu = getAdjustedUnit(date.millisecondsFromNow());
-      format = format.apply(date, adu.concat(loc));
+      adu = getRelativeWithMonthFallback(date);
+      format = format.apply(date, adu.concat(getLocalization(localeCode)));
     }
     if(!format && relative) {
-      adu = adu || getAdjustedUnit(date.millisecondsFromNow());
+      adu = adu || getRelativeWithMonthFallback(date);
       // Adjust up if time is in ms, as this doesn't
       // look very good for a standard relative date.
       if(adu[1] === 0) {
         adu[1] = 1;
         adu[0] = 1;
       }
-      return loc.getRelativeFormat(adu);
+      return getLocalization(localeCode).getRelativeFormat(adu);
+    }
+    format = format || 'long';
+    if(format === 'short' || format === 'long' || format === 'full') {
+      format = getLocalization(localeCode)[format];
     }
 
-    format = format || 'long';
-    format = loc[format] || format;
+    if(!CompiledOutputFormats[format]) {
+      buildCompiledOutputFormat(format);
+    }
 
-    DateOutputFormats.forEach(function(dof) {
-      format = format.replace(regexp('\\{('+dof.token+')(\\d)?\\}', dof.word ? 'i' : ''), function(m,t,d) {
-        var val = dof.format(date, loc, d || 1, t), l = t.length, one = t.match(/^(.)\1+$/);
-        if(dof.word) {
-          if(l === 3) val = val.slice(0,3);
-          if(one || t.match(caps)) val = simpleCapitalize(val);
-        } else if(one && !dof.text) {
-          val = (isNumber(val) ? padNumber(val, l) : val.toString()).slice(-l);
-        }
-        return val;
-      });
-    });
-    return format;
+    return executeCompiledOutputFormat(date, format, localeCode);
   }
 
   // Date comparison helpers
 
-  function compareDate(d, find, buffer, forceUTC) {
-    var p, t, min, max, minOffset, maxOffset, override, capitalized, accuracy = 0, loBuffer = 0, hiBuffer = 0;
-    p = getExtendedDate(find, null, null, forceUTC);
+  function compareDate(d, find, localeCode, buffer, forceUTC) {
+    var p, t, min, max, override, capitalized, accuracy = 0, loBuffer = 0, hiBuffer = 0;
+    p = getExtendedDate(find, localeCode, null, forceUTC);
     if(buffer > 0) {
       loBuffer = hiBuffer = buffer;
       override = true;
@@ -2934,7 +3391,7 @@
     if(!p.date.isValid()) return false;
     if(p.set && p.set.specificity) {
       DateUnits.forEach(function(u, i) {
-        if(u.unit === p.set.specificity) {
+        if(u.name === p.set.specificity) {
           accuracy = u.multiplier(p.date, d - p.date) - 1;
         }
       });
@@ -2961,8 +3418,8 @@
 
   function compensateForTimezoneTraversal(d, min, max) {
     var dMin, dMax, minOffset, maxOffset;
-    dMin = new Date(min);
-    dMax = new Date(max).utc(d.isUTC());
+    dMin = new date(min);
+    dMax = new date(max).utc(d.isUTC());
     if(callDateGet(dMax, 'Hours') !== 23) {
       minOffset = dMin.getTimezoneOffset();
       maxOffset = dMax.getTimezoneOffset();
@@ -2989,8 +3446,10 @@
     }
 
     function canDisambiguate() {
-      var now = new date;
-      return (prefer === -1 && d > now) || (prefer === 1 && d < now);
+      switch(prefer) {
+        case -1: return d > getNewDate();
+        case  1: return d < getNewDate();
+      }
     }
 
     if(isNumber(params) && advance) {
@@ -3012,31 +3471,30 @@
     // because the order needs to be reversed in order to get the lowest specificity,
     // also because higher order units can be overwritten by lower order units, such
     // as setting hour: 3, minute: 345, etc.
-    iterateOverObject(DateUnitsReversed, function(i,u) {
-      var isDay = u.unit === 'day';
-      if(uniqueParamExists(u.unit, isDay)) {
-        params.specificity = u.unit;
+    iterateOverDateUnits(function(name, unit, i) {
+      var isDay = name === 'day';
+      if(uniqueParamExists(name, isDay)) {
+        params.specificity = name;
         specificityIndex = +i;
         return false;
-      } else if(reset && u.unit !== 'week' && (!isDay || !paramExists('week'))) {
+      } else if(reset && name !== 'week' && (!isDay || !paramExists('week'))) {
         // Days are relative to months, not weeks, so don't reset if a week exists.
-        callDateSet(d, u.method, (isDay ? 1 : 0));
+        callDateSet(d, unit.method, (isDay ? 1 : 0));
       }
     });
 
-
     // Now actually set or advance the date in order, higher units first.
-    DateUnits.forEach(function(u,i) {
-      var unit = u.unit, method = u.method, higherUnit = DateUnits[i - 1], value;
-      value = getParam(unit)
+    DateUnits.forEach(function(u, i) {
+      var name = u.name, method = u.method, higherUnit = DateUnits[i - 1], value;
+      value = getParam(name)
       if(isUndefined(value)) return;
       if(advance) {
-        if(unit === 'week') {
+        if(name === 'week') {
           value  = (params['day'] || 0) + (value * 7);
           method = 'Date';
         }
         value = (value * advance) + callDateGet(d, method);
-      } else if(unit === 'month' && paramExists('day')) {
+      } else if(name === 'month' && paramExists('day')) {
         // When setting the month, there is a chance that we will traverse into a new month.
         // This happens in DST shifts, for example June 1st DST jumping to January 1st
         // (non-DST) will have a shift of -1:00 which will traverse into the previous year.
@@ -3054,7 +3512,7 @@
         callDateSet(d, 'Date', 15);
       }
       callDateSet(d, method, value);
-      if(advance && unit === 'month') {
+      if(advance && name === 'month') {
         checkMonthTraversal(d, value);
       }
     });
@@ -3067,24 +3525,18 @@
       d.setWeekday(weekday);
     }
 
+    // If past or future is preferred, then the process of "disambiguation" will ensure that an
+    // ambiguous time/date ("4pm", "thursday", "June", etc.) will be in the past or future.
     if(canDisambiguate()) {
-      iterateOverObject(DateUnitsReversed.slice(specificityIndex + 1), function(i,u) {
-        var ambiguous = u.ambiguous || (u.unit === 'week' && paramExists('weekday'));
-        if(ambiguous && !uniqueParamExists(u.unit, u.unit === 'day')) {
-          d[u.addMethod](prefer);
+      iterateOverDateUnits(function(name, unit) {
+        var ambiguous = unit.ambiguous || (name === 'week' && paramExists('weekday'));
+        if(ambiguous && !uniqueParamExists(name, name === 'day')) {
+          d[unit.addMethod](prefer);
           return false;
         }
-      });
+      }, specificityIndex + 1);
     }
     return d;
-  }
-
-  function callDateGet(d, method) {
-    return d['get' + (d._utc ? 'UTC' : '') + method]();
-  }
-
-  function callDateSet(d, method, value) {
-    return d['set' + (d._utc ? 'UTC' : '') + method](value);
   }
 
   // The ISO format allows times strung together without a demarcating ":", so make sure
@@ -3136,6 +3588,10 @@
       localeCode = args[1];
     }
     return getExtendedDate(f, localeCode, prefer, forceUTC).date;
+  }
+
+  function invalidateDate(d) {
+    d.setTime(NaN);
   }
 
   function buildDateUnits() {
@@ -3342,8 +3798,8 @@
    ***/
 
   function buildDateMethods() {
-    extendSimilar(date, true, false, DateUnits, function(methods, u, i) {
-      var unit = u.unit, caps = simpleCapitalize(unit), multiplier = u.multiplier(), since, until;
+    extendSimilar(date, true, true, DateUnits, function(methods, u, i) {
+      var name = u.name, caps = simpleCapitalize(name), multiplier = u.multiplier(), since, until;
       u.addMethod = 'add' + caps + 's';
       // "since/until now" only count "past" an integer, i.e. "2 days ago" is
       // anything between 2 - 2.999 days. The default margin of error is 0.999,
@@ -3362,10 +3818,10 @@
         var num      = ms / multiplier,
             fraction = num % 1,
             error    = u.error || 0.999;
-        if(fraction && math.abs(fraction % 1) > error) {
+        if(fraction && abs(fraction % 1) > error) {
           num = round(num);
         }
-        return parseInt(num);
+        return num < 0 ? ceil(num) : floor(num);
       }
       since = function(f, localeCode) {
         return applyErrorMargin(this.getTime() - date.create(f, localeCode).getTime());
@@ -3373,40 +3829,40 @@
       until = function(f, localeCode) {
         return applyErrorMargin(date.create(f, localeCode).getTime() - this.getTime());
       };
-      methods[unit+'sAgo']     = until;
-      methods[unit+'sUntil']   = until;
-      methods[unit+'sSince']   = since;
-      methods[unit+'sFromNow'] = since;
+      methods[name+'sAgo']     = until;
+      methods[name+'sUntil']   = until;
+      methods[name+'sSince']   = since;
+      methods[name+'sFromNow'] = since;
       methods[u.addMethod] = function(num, reset) {
         var set = {};
-        set[unit] = num;
+        set[name] = num;
         return this.advance(set, reset);
       };
       buildNumberToDateAlias(u, multiplier);
       if(i < 3) {
         ['Last','This','Next'].forEach(function(shift) {
           methods['is' + shift + caps] = function() {
-            return this.is(shift + ' ' + unit);
+            return compareDate(this, shift + ' ' + name, 'en');
           };
         });
       }
       if(i < 4) {
         methods['beginningOf' + caps] = function() {
           var set = {};
-          switch(unit) {
-            case 'year':  set['year']  = callDateGet(this, 'FullYear'); break;
-            case 'month': set['month'] = callDateGet(this, 'Month');    break;
-            case 'day':   set['day']   = callDateGet(this, 'Date');     break;
+          switch(name) {
+            case 'year':  set['year']    = callDateGet(this, 'FullYear'); break;
+            case 'month': set['month']   = callDateGet(this, 'Month');    break;
+            case 'day':   set['day']     = callDateGet(this, 'Date');     break;
             case 'week':  set['weekday'] = 0; break;
           }
           return this.set(set, true);
         };
         methods['endOf' + caps] = function() {
           var set = { 'hours': 23, 'minutes': 59, 'seconds': 59, 'milliseconds': 999 };
-          switch(unit) {
-            case 'year':  set['month'] = 11; set['day'] = 31; break;
-            case 'month': set['day'] = this.daysInMonth(); break;
-            case 'week':  set['weekday'] = 6; break;
+          switch(name) {
+            case 'year':  set['month']   = 11; set['day'] = 31; break;
+            case 'month': set['day']     = this.daysInMonth();  break;
+            case 'week':  set['weekday'] = 6;                   break;
           }
           return this.set(set, true);
         };
@@ -3418,7 +3874,7 @@
     English.addFormat('([+-])?(\\d{4,4})[-.]?{full_month}[-.]?(\\d{1,2})?', true, ['year_sign','year','month','date'], false, true);
     English.addFormat('(\\d{1,2})[-.\\/]{full_month}(?:[-.\\/](\\d{2,4}))?', true, ['date','month','year'], true);
     English.addFormat('{full_month}[-.](\\d{4,4})', false, ['month','year']);
-    English.addFormat('\\/Date\\((\\d+(?:\\+\\d{4,4})?)\\)\\/', false, ['timestamp'])
+    English.addFormat('\\/Date\\((\\d+(?:[+-]\\d{4,4})?)\\)\\/', false, ['timestamp'])
     English.addFormat(prepareTime(RequiredTime, English), false, TimeFormat)
 
     // When a new locale is initialized it will have the CoreDateFormats initialized by default.
@@ -3433,8 +3889,56 @@
     English.compiledFormats = English.compiledFormats.slice(7).concat(CoreDateFormats);
   }
 
-  function buildDateOutputShortcuts() {
-    extendSimilar(date, true, false, 'short,long,full', function(methods, name) {
+  function buildFormatTokens() {
+
+    createPaddedToken('f', function(d) {
+      return callDateGet(d, 'Milliseconds');
+    }, true);
+
+    createPaddedToken('s', function(d) {
+      return callDateGet(d, 'Seconds');
+    });
+
+    createPaddedToken('m', function(d) {
+      return callDateGet(d, 'Minutes');
+    });
+
+    createPaddedToken('h', function(d) {
+      return callDateGet(d, 'Hours') % 12 || 12;
+    });
+
+    createPaddedToken('H', function(d) {
+      return callDateGet(d, 'Hours');
+    });
+
+    createPaddedToken('d', function(d) {
+      return callDateGet(d, 'Date');
+    });
+
+    createPaddedToken('M', function(d) {
+      return callDateGet(d, 'Month') + 1;
+    });
+
+    createMeridianTokens();
+    createWeekdayTokens();
+    createMonthTokens();
+
+    // Aliases
+    DateFormatTokens['ms']           = DateFormatTokens['f'];
+    DateFormatTokens['milliseconds'] = DateFormatTokens['f'];
+    DateFormatTokens['seconds']      = DateFormatTokens['s'];
+    DateFormatTokens['minutes']      = DateFormatTokens['m'];
+    DateFormatTokens['hours']        = DateFormatTokens['h'];
+    DateFormatTokens['24hr']         = DateFormatTokens['H'];
+    DateFormatTokens['12hr']         = DateFormatTokens['h'];
+    DateFormatTokens['date']         = DateFormatTokens['d'];
+    DateFormatTokens['day']          = DateFormatTokens['d'];
+    DateFormatTokens['year']         = DateFormatTokens['yyyy'];
+
+  }
+
+  function buildFormatShortcuts() {
+    extendSimilar(date, true, true, 'short,long,full', function(methods, name) {
       methods[name] = function(localeCode) {
         return formatDate(this, name, false, localeCode);
       }
@@ -3445,13 +3949,11 @@
     KanjiDigits.split('').forEach(function(digit, value) {
       var holder;
       if(value > 9) {
-        value = math.pow(10, value - 9);
+        value = pow(10, value - 9);
       }
       AsianDigitMap[digit] = value;
     });
-    FullWidthDigits.split('').forEach(function(digit, value) {
-      AsianDigitMap[digit] = value;
-    });
+    simpleMerge(AsianDigitMap, NumberNormalizeMap);
     // Kanji numerals may also be included in phrases which are text-based rather
     // than actual numbers such as Chinese weekdays (上周三), and "the day before
     // yesterday" (一昨日) in Japanese, so don't match these.
@@ -3508,7 +4010,7 @@
     var special  = 'today,yesterday,tomorrow,weekday,weekend,future,past'.split(',');
     var weekdays = English['weekdays'].slice(0,7);
     var months   = English['months'].slice(0,12);
-    extendSimilar(date, true, false, special.concat(weekdays).concat(months), function(methods, name) {
+    extendSimilar(date, true, true, special.concat(weekdays).concat(months), function(methods, name) {
       methods['is'+ simpleCapitalize(name)] = function(utc) {
        return this.is(name, 0, utc);
       };
@@ -3516,8 +4018,10 @@
   }
 
   function buildUTCAliases() {
-    date.extend({
-      'utc': {
+    // Don't want to use extend here as it will override
+    // the actual "utc" method on the prototype.
+    if(date['utc']) return;
+    date['utc'] = {
 
         'create': function() {
           return createDate(arguments, 0, true);
@@ -3530,22 +4034,20 @@
         'future': function() {
           return createDate(arguments, 1, true);
         }
-
-      }
-    }, false, false);
+    };
   }
 
   function setDateProperties() {
-    date.extend({
+    extend(date, false , true, {
       'RFC1123': '{Dow}, {dd} {Mon} {yyyy} {HH}:{mm}:{ss} {tz}',
       'RFC1036': '{Weekday}, {dd}-{Mon}-{yy} {HH}:{mm}:{ss} {tz}',
       'ISO8601_DATE': '{yyyy}-{MM}-{dd}',
       'ISO8601_DATETIME': '{yyyy}-{MM}-{dd}T{HH}:{mm}:{ss}.{fff}{isotz}'
-    }, false, false);
+    });
   }
 
 
-  date.extend({
+  extend(date, false, true, {
 
      /***
      * @method Date.create(<d>, [locale] = currentLocale)
@@ -3580,6 +4082,7 @@
      * @extra For example %"Sunday"% can be either "the Sunday coming up" or "the Sunday last" depending on context. Note that dates explicitly in the future ("next Sunday") will remain in the future. This method simply provides a hint when ambiguity exists. UTC-based dates can be created through the %utc% object. For more, see @date_format.
      * @set
      *   Date.utc.past
+     *
      * @example
      *
      *   Date.past('July')          -> July of this year or last depending on the current month
@@ -3659,9 +4162,9 @@
       addDateInputFormat(getLocalization(localeCode), format, match);
     }
 
-  }, false, false);
+  });
 
-  date.extend({
+  extend(date, true, true, {
 
      /***
      * @method set(<set>, [reset] = false)
@@ -3686,6 +4189,7 @@
      * @method setWeekday()
      * @returns Nothing
      * @short Sets the weekday of the date.
+     * @extra In order to maintain a parallel with %getWeekday% (which itself is an alias for Javascript native %getDay%), Sunday is considered day %0%. This contrasts with ISO-8601 standard (used in %getISOWeek% and %setISOWeek%) which places Sunday at the end of the week (day 7). This effectively means that passing %0% to this method while in the middle of a week will rewind the date, where passing %7% will advance it.
      *
      * @example
      *
@@ -3699,36 +4203,81 @@
     },
 
      /***
-     * @method setWeek()
+     * @method setISOWeek()
      * @returns Nothing
-     * @short Sets the week (of the year).
+     * @short Sets the week (of the year) as defined by the ISO-8601 standard.
+     * @extra Note that this standard places Sunday at the end of the week (day 7).
      *
      * @example
      *
-     *   d = new Date(); d.setWeek(15); d; -> 15th week of the year
+     *   d = new Date(); d.setISOWeek(15); d; -> 15th week of the year
      *
      ***/
-    'setWeek': function(week) {
+    'setISOWeek': function(week) {
+      var weekday = callDateGet(this, 'Day') || 7;
       if(isUndefined(week)) return;
-      var date = callDateGet(this, 'Date');
-      callDateSet(this, 'Month', 0);
-      callDateSet(this, 'Date', (week * 7) + 1);
+      this.set({ 'month': 0, 'date': 4 });
+      this.set({ 'weekday': 1 });
+      if(week > 1) {
+        this.addWeeks(week - 1);
+      }
+      if(weekday !== 1) {
+        this.advance({ 'days': weekday - 1 });
+      }
       return this.getTime();
     },
 
      /***
-     * @method getWeek()
+     * @method getISOWeek()
      * @returns Number
-     * @short Gets the date's week (of the year).
-     * @extra If %utc% is set on the date, the week will be according to UTC time.
+     * @short Gets the date's week (of the year) as defined by the ISO-8601 standard.
+     * @extra Note that this standard places Sunday at the end of the week (day 7). If %utc% is set on the date, the week will be according to UTC time.
      *
      * @example
      *
-     *   new Date().getWeek()    -> today's week of the year
+     *   new Date().getISOWeek()    -> today's week of the year
      *
      ***/
-    'getWeek': function() {
+    'getISOWeek': function() {
       return getWeekNumber(this);
+    },
+
+     /***
+     * @method beginningOfISOWeek()
+     * @returns Date
+     * @short Set the date to the beginning of week as defined by this ISO-8601 standard.
+     * @extra Note that this standard places Monday at the start of the week.
+     * @example
+     *
+     *   Date.create().beginningOfISOWeek() -> Monday
+     *
+     ***/
+    'beginningOfISOWeek': function() {
+      var day = this.getDay();
+      if(day === 0) {
+        day = -6;
+      } else if(day !== 1) {
+        day = 1;
+      }
+      this.setWeekday(day);
+      return this.reset();
+    },
+
+     /***
+     * @method endOfISOWeek()
+     * @returns Date
+     * @short Set the date to the end of week as defined by this ISO-8601 standard.
+     * @extra Note that this standard places Sunday at the end of the week.
+     * @example
+     *
+     *   Date.create().endOfISOWeek() -> Sunday
+     *
+     ***/
+    'endOfISOWeek': function() {
+      if(this.getDay() !== 0) {
+        this.setWeekday(7);
+      }
+      return this.endOfDay()
     },
 
      /***
@@ -3745,7 +4294,7 @@
       var offset = this._utc ? 0 : this.getTimezoneOffset();
       var colon  = iso === true ? ':' : '';
       if(!offset && iso) return 'Z';
-      return padNumber(round(-offset / 60), 2, true) + colon + padNumber(offset % 60, 2);
+      return padNumber(floor(-offset / 60), 2, true) + colon + padNumber(abs(offset % 60), 2);
     },
 
      /***
@@ -3873,8 +4422,8 @@
       var t  = this.getTime();
       var t1 = date.create(d1).getTime();
       var t2 = date.create(d2).getTime();
-      var lo = math.min(t1, t2);
-      var hi = math.max(t1, t2);
+      var lo = min(t1, t2);
+      var hi = max(t1, t2);
       margin = margin || 0;
       return (lo - margin < t) && (hi + margin > t);
     },
@@ -3950,12 +4499,12 @@
      *   });                                      -> ex. 5 months ago
      *
      ***/
-    'relative': function(f, localeCode) {
-      if(isString(f)) {
-        localeCode = f;
-        f = null;
+    'relative': function(fn, localeCode) {
+      if(isString(fn)) {
+        localeCode = fn;
+        fn = null;
       }
-      return formatDate(this, f, true, localeCode);
+      return formatDate(this, fn, true, localeCode);
     },
 
      /***
@@ -3981,15 +4530,15 @@
         d = d.trim().toLowerCase();
         comp = this.clone().utc(utc);
         switch(true) {
-          case d === 'future':  return this.getTime() > new date().getTime();
-          case d === 'past':    return this.getTime() < new date().getTime();
+          case d === 'future':  return this.getTime() > getNewDate().getTime();
+          case d === 'past':    return this.getTime() < getNewDate().getTime();
           case d === 'weekday': return callDateGet(comp, 'Day') > 0 && callDateGet(comp, 'Day') < 6;
           case d === 'weekend': return callDateGet(comp, 'Day') === 0 || callDateGet(comp, 'Day') === 6;
           case (tmp = English['weekdays'].indexOf(d) % 7) > -1: return callDateGet(comp, 'Day') === tmp;
           case (tmp = English['months'].indexOf(d) % 12) > -1:  return callDateGet(comp, 'Month') === tmp;
         }
       }
-      return compareDate(this, d, margin, utc);
+      return compareDate(this, d, null, margin, utc);
     },
 
      /***
@@ -4007,7 +4556,7 @@
       unit = unit || 'hours';
       if(unit === 'date') unit = 'days';
       recognized = DateUnits.some(function(u) {
-        return unit === u.unit || unit === u.unit + 's';
+        return unit === u.name || unit === u.name + 's';
       });
       params[unit] = unit.match(/^days?/) ? 1 : 0;
       return recognized ? this.set(params, true) : this;
@@ -4024,7 +4573,7 @@
      ***/
     'clone': function() {
       var d = new date(this.getTime());
-      d.utc(this.isUTC());
+      d.utc(!!this._utc);
       return d;
     }
 
@@ -4032,7 +4581,7 @@
 
 
   // Instance aliases
-  date.extend({
+  extend(date, true, true, {
 
      /***
      * @method iso()
@@ -4072,7 +4621,7 @@
    * @method [unit]()
    * @returns Number
    * @short Takes the number as a corresponding unit of time and converts to milliseconds.
-   * @extra Method names can be both singular and plural.  Note that as "a month" is ambiguous as a unit of time, %months% will be equivalent to 30.4375 days, the average number in a month. Be careful using %months% if you need exact precision.
+   * @extra Method names can be singular or plural.  Note that as "a month" is ambiguous as a unit of time, %months% will be equivalent to 30.4375 days, the average number in a month. Be careful using %months% if you need exact precision.
    *
    * @set
    *   millisecond
@@ -4216,24 +4765,24 @@
    *
    ***/
   function buildNumberToDateAlias(u, multiplier) {
-    var unit = u.unit, methods = {};
+    var name = u.name, methods = {};
     function base() { return round(this * multiplier); }
     function after() { return createDate(arguments)[u.addMethod](this);  }
     function before() { return createDate(arguments)[u.addMethod](-this); }
-    methods[unit] = base;
-    methods[unit + 's'] = base;
-    methods[unit + 'Before'] = before;
-    methods[unit + 'sBefore'] = before;
-    methods[unit + 'Ago'] = before;
-    methods[unit + 'sAgo'] = before;
-    methods[unit + 'After'] = after;
-    methods[unit + 'sAfter'] = after;
-    methods[unit + 'FromNow'] = after;
-    methods[unit + 'sFromNow'] = after;
+    methods[name] = base;
+    methods[name + 's'] = base;
+    methods[name + 'Before'] = before;
+    methods[name + 'sBefore'] = before;
+    methods[name + 'Ago'] = before;
+    methods[name + 'sAgo'] = before;
+    methods[name + 'After'] = after;
+    methods[name + 'sAfter'] = after;
+    methods[name + 'FromNow'] = after;
+    methods[name + 'sFromNow'] = after;
     number.extend(methods);
   }
 
-  number.extend({
+  extend(number, true, true, {
 
      /***
      * @method duration([locale] = currentLocale)
@@ -4272,9 +4821,6 @@
     'future':     '{num} {unit} {sign}',
     'duration':   '{num} {unit}',
     'modifiers': [
-      { 'name': 'day',   'src': 'yesterday', 'value': -1 },
-      { 'name': 'day',   'src': 'today', 'value': 0 },
-      { 'name': 'day',   'src': 'tomorrow', 'value': 1 },
       { 'name': 'sign',  'src': 'ago|before', 'value': -1 },
       { 'name': 'sign',  'src': 'from now|after|from|in|later', 'value': 1 },
       { 'name': 'edge',  'src': 'last day', 'value': -2 },
@@ -4285,14 +4831,14 @@
       { 'name': 'shift', 'src': 'next', 'value': 1 }
     ],
     'dateParse': [
-      '{num} {unit} {sign}',
-      '{sign} {num} {unit}',
       '{month} {year}',
       '{shift} {unit=5-7}',
       '{0?} {date}{1}',
       '{0?} {edge} of {shift?} {unit=4-7?}{month?}{year?}'
     ],
     'timeParse': [
+      '{num} {unit} {sign}',
+      '{sign} {num} {unit}',
       '{0} {num}{1} {day} of {month} {year?}',
       '{weekday?} {month} {date}{1?} {year?}',
       '{date} {month} {year}',
@@ -4309,7 +4855,8 @@
   buildDateUnits();
   buildDateMethods();
   buildCoreInputFormats();
-  buildDateOutputShortcuts();
+  buildFormatTokens();
+  buildFormatShortcuts();
   buildAsianDigits();
   buildRelativeAliases();
   buildUTCAliases();
@@ -4317,115 +4864,196 @@
 
 
   /***
-   * @package DateRange
-   * @dependency date
-   * @description Date Ranges define a range of time. They can enumerate over specific points within that range, and be manipulated and compared.
+   * @package Range
+   * @dependency core
+   * @description Ranges allow creating spans of numbers, strings, or dates. They can enumerate over specific points within that range, and be manipulated and compared.
    *
    ***/
 
-  var DateRange = function(start, end) {
-    this.start = date.create(start);
-    this.end   = date.create(end);
+  function Range(start, end) {
+    this.start = cloneRangeMember(start);
+    this.end   = cloneRangeMember(end);
   };
 
-  // 'toString' doesn't appear in a for..in loop in IE even though
+  function getRangeMemberNumericValue(m) {
+    return isString(m) ? m.charCodeAt(0) : m;
+  }
+
+  function getRangeMemberPrimitiveValue(m) {
+    if(m == null) return m;
+    return isDate(m) ? m.getTime() : m.valueOf();
+  }
+
+  function cloneRangeMember(m) {
+    if(isDate(m)) {
+      return new date(m.getTime());
+    } else {
+      return getRangeMemberPrimitiveValue(m);
+    }
+  }
+
+  function isValidRangeMember(m) {
+    var val = getRangeMemberPrimitiveValue(m);
+    return !!val || val === 0;
+  }
+
+  function getDuration(amt) {
+    var match, val, unit;
+    if(isNumber(amt)) {
+      return amt;
+    }
+    match = amt.toLowerCase().match(/^(\d+)?\s?(\w+?)s?$/i);
+    val = parseInt(match[1]) || 1;
+    unit = match[2].slice(0,1).toUpperCase() + match[2].slice(1);
+    if(unit.match(/hour|minute|second/i)) {
+      unit += 's';
+    } else if(unit === 'Year') {
+      unit = 'FullYear';
+    } else if(unit === 'Day') {
+      unit = 'Date';
+    }
+    return [val, unit];
+  }
+
+  function incrementDate(current, amount) {
+    var num, unit, val, d;
+    if(isNumber(amount)) {
+      return new date(current.getTime() + amount);
+    }
+    num  = amount[0];
+    unit = amount[1];
+    val  = callDateGet(current, unit);
+    d    = new date(current.getTime());
+    callDateSet(d, unit, val + num);
+    return d;
+  }
+
+  function incrementString(current, amount) {
+    return string.fromCharCode(current.charCodeAt(0) + amount);
+  }
+
+  function incrementNumber(current, amount) {
+    return current + amount;
+  }
+
+  /***
+   * @method toString()
+   * @returns String
+   * @short Returns a string representation of the range.
+   * @example
+   *
+   *   Number.range(1, 5).toString()                               -> 1..5
+   *   Date.range(new Date(2003, 0), new Date(2005, 0)).toString() -> January 1, 2003..January 1, 2005
+   *
+   ***/
+
+  // Note: 'toString' doesn't appear in a for..in loop in IE even though
   // hasOwnProperty reports true, so extend() can't be used here.
   // Also tried simply setting the prototype = {} up front for all
   // methods but GCC very oddly started dropping properties in the
   // object randomly (maybe because of the global scope?) hence
   // the need for the split logic here.
-  DateRange.prototype.toString = function() {
-    /***
-     * @method toString()
-     * @returns String
-     * @short Returns a string representation of the DateRange.
-     * @example
-     *
-     *   Date.range('2003', '2005').toString() -> January 1, 2003..January 1, 2005
-     *
-     ***/
-    return this.isValid() ? this.start.full() + '..' + this.end.full() : 'Invalid DateRange';
+  Range.prototype.toString = function() {
+    return this.isValid() ? this.start + ".." + this.end : 'Invalid Range';
   };
 
-  extend(DateRange, true, false, {
+  extend(Range, true, true, {
 
     /***
      * @method isValid()
      * @returns Boolean
-     * @short Returns true if the DateRange is valid, false otherwise.
+     * @short Returns true if the range is valid, false otherwise.
      * @example
      *
-     *   Date.range('2003', '2005').isValid() -> true
-     *   Date.range('2005', '2003').isValid() -> false
+     *   Date.range(new Date(2003, 0), new Date(2005, 0)).isValid() -> true
+     *   Number.range(NaN, NaN).isValid()                           -> false
      *
      ***/
     'isValid': function() {
-      return this.start < this.end;
+      return isValidRangeMember(this.start) && isValidRangeMember(this.end) && typeof this.start === typeof this.end;
     },
 
     /***
-     * @method duration()
+     * @method span()
      * @returns Number
-     * @short Return the duration of the DateRange in milliseconds.
+     * @short Returns the span of the range. If the range is a date range, the value is in milliseconds.
+     * @extra The span includes both the start and the end.
      * @example
      *
-     *   Date.range('2003', '2005').duration() -> 94694400000
+     *   Number.range(5, 10).span()                              -> 6
+     *   Date.range(new Date(2003, 0), new Date(2005, 0)).span() -> 94694400000
      *
      ***/
-    'duration': function() {
-      return this.isValid() ? this.end.getTime() - this.start.getTime() : NaN;
+    'span': function() {
+      return this.isValid() ? abs(
+        getRangeMemberNumericValue(this.end) - getRangeMemberNumericValue(this.start)
+      ) + 1 : NaN;
     },
 
     /***
-     * @method contains(<d>)
+     * @method contains(<obj>)
      * @returns Boolean
-     * @short Returns true if <d> is contained inside the DateRange. <d> may be a date or another DateRange.
+     * @short Returns true if <obj> is contained inside the range. <obj> may be a value or another range.
      * @example
      *
-     *   Date.range('2003', '2005').contains(Date.create('2004')) -> true
+     *   Number.range(5, 10).contains(7)                                              -> true
+     *   Date.range(new Date(2003, 0), new Date(2005, 0)).contains(new Date(2004, 0)) -> true
      *
      ***/
     'contains': function(obj) {
-      var self = this, arr = obj.start && obj.end ? [obj.start, obj.end] : [obj];
-      return arr.every(function(d) {
-        return d >= self.start && d <= self.end;
-      });
+      var self = this, arr;
+      if(obj == null) return false;
+      if(obj.start && obj.end) {
+        return obj.start >= this.start && obj.start <= this.end &&
+               obj.end   >= this.start && obj.end   <= this.end;
+      } else {
+        return obj >= this.start && obj <= this.end;
+      }
     },
 
     /***
-     * @method every(<increment>, [fn])
+     * @method every(<amount>, [fn])
      * @returns Array
-     * @short Iterates through the DateRange for every <increment>, calling [fn] if it is passed. Returns an array of each increment visited.
-     * @extra When <increment> is a number, increments will be to the exact millisecond. <increment> can also be a string in the format %{number} {unit}s%, in which case it will increment in the unit specified. Note that a discrepancy exists in the case of months, as %(2).months()% is an approximation. Stepping through the actual months by passing %"2 months"% is usually preferable in this case.
+     * @short Iterates through the range for every <amount>, calling [fn] if it is passed. Returns an array of each increment visited.
+     * @extra In the case of date ranges, <amount> can also be a string, in which case it will increment a number of  units. Note that %(2).months()% first resolves to a number, which will be interpreted as milliseconds and is an approximation, so stepping through the actual months by passing %"2 months"% is usually preferable.
      * @example
      *
-     *   Date.range('2003-01', '2003-03').every("2 months") -> [...]
+     *   Number.range(2, 8).every(2)                                       -> [2,4,6,8]
+     *   Date.range(new Date(2003, 1), new Date(2003,3)).every("2 months") -> [...]
      *
      ***/
-    'every': function(increment, fn) {
-      var current = this.start.clone(), result = [], index = 0, params, isDay;
-      if(isString(increment)) {
-        current.advance(getDateParamsFromString(increment, 0), true);
-        params = getDateParamsFromString(increment);
-        isDay = increment.toLowerCase() === 'day';
-      } else {
-        params = { 'milliseconds': increment };
+    'every': function(amount, fn) {
+      var increment,
+          start   = this.start,
+          end     = this.end,
+          inverse = end < start,
+          current = start,
+          index   = 0,
+          result  = [];
+
+      if(isFunction(amount)) {
+        fn = amount;
+        amount = null;
       }
-      while(current <= this.end) {
+      amount = amount || 1;
+      if(isNumber(start)) {
+        increment = incrementNumber;
+      } else if(isString(start)) {
+        increment = incrementString;
+      } else if(isDate(start)) {
+        amount    = getDuration(amount);
+        increment = incrementDate;
+      }
+      // Avoiding infinite loops
+      if(inverse && amount > 0) {
+        amount *= -1;
+      }
+      while(inverse ? current >= end : current <= end) {
         result.push(current);
-        if(fn) fn(current, index);
-        if(isDay && callDateGet(current, 'Hours') === 23) {
-          // When DST traversal happens at 00:00 hours, the time is effectively
-          // pushed back to 23:00, meaning 1) 00:00 for that day does not exist,
-          // and 2) there is no difference between 23:00 and 00:00, as you are
-          // "jumping" around in time. Hours here will be reset before the date
-          // is advanced and the date will never in fact advance, so set the hours
-          // directly ahead to the next day to avoid this problem.
-          current = current.clone();
-          callDateSet(current, 'Hours', 48);
-        } else {
-          current = current.clone().advance(params, true);
+        if(fn) {
+          fn(current, index);
         }
+        current = increment(current, amount);
         index++;
       }
       return result;
@@ -4433,15 +5061,16 @@
 
     /***
      * @method union(<range>)
-     * @returns DateRange
-     * @short Returns a new DateRange with the earliest starting point as its start, and the latest ending point as its end. If the two ranges do not intersect this will effectively remove the "gap" between them.
+     * @returns Range
+     * @short Returns a new range with the earliest starting point as its start, and the latest ending point as its end. If the two ranges do not intersect this will effectively remove the "gap" between them.
      * @example
      *
-     *   Date.range('2003=01', '2005-01').union(Date.range('2004-01', '2006-01')) -> Jan 1, 2003..Jan 1, 2006
+     *   Number.range(1, 3).union(Number.range(2, 5)) -> 1..5
+     *   Date.range(new Date(2003, 1), new Date(2005, 1)).union(Date.range(new Date(2004, 1), new Date(2006, 1))) -> Jan 1, 2003..Jan 1, 2006
      *
      ***/
     'union': function(range) {
-      return new DateRange(
+      return new Range(
         this.start < range.start ? this.start : range.start,
         this.end   > range.end   ? this.end   : range.end
       );
@@ -4449,15 +5078,19 @@
 
     /***
      * @method intersect(<range>)
-     * @returns DateRange
-     * @short Returns a new DateRange with the latest starting point as its start, and the earliest ending point as its end. If the two ranges do not intersect this will effectively produce an invalid range.
+     * @returns Range
+     * @short Returns a new range with the latest starting point as its start, and the earliest ending point as its end. If the two ranges do not intersect this will effectively produce an invalid range.
      * @example
      *
-     *   Date.range('2003-01', '2005-01').intersect(Date.range('2004-01', '2006-01')) -> Jan 1, 2004..Jan 1, 2005
+     *   Number.range(1, 5).intersect(Number.range(4, 8)) -> 4..5
+     *   Date.range(new Date(2003, 1), new Date(2005, 1)).intersect(Date.range(new Date(2004, 1), new Date(2006, 1))) -> Jan 1, 2004..Jan 1, 2005
      *
      ***/
     'intersect': function(range) {
-      return new DateRange(
+      if(range.start > this.end || range.end < this.start) {
+        return new Range(NaN, NaN);
+      }
+      return new Range(
         this.start > range.start ? this.start : range.start,
         this.end   < range.end   ? this.end   : range.end
       );
@@ -4465,60 +5098,180 @@
 
     /***
      * @method clone()
-     * @returns DateRange
-     * @short Clones the DateRange.
+     * @returns Range
+     * @short Clones the range.
+     * @extra Members of the range will also be cloned.
      * @example
      *
-     *   Date.range('2003-01', '2005-01').intersect(Date.range('2004-01', '2006-01')) -> Jan 1, 2004..Jan 1, 2005
+     *   Number.range(1, 5).clone() -> Returns a copy of the range.
      *
      ***/
     'clone': function(range) {
-      return new DateRange(this.start, this.end);
+      return new Range(this.start, this.end);
+    },
+
+    /***
+     * @method clamp(<obj>)
+     * @returns Mixed
+     * @short Clamps <obj> to be within the range if it falls outside.
+     * @example
+     *
+     *   Number.range(1, 5).clamp(8) -> 5
+     *   Date.range(new Date(2010, 0), new Date(2012, 0)).clamp(new Date(2013, 0)) -> 2012-01
+     *
+     ***/
+    'clamp': function(obj) {
+      var clamped,
+          start = this.start,
+          end = this.end,
+          min = end < start ? end : start,
+          max = start > end ? start : end;
+      if(obj < min) {
+        clamped = min;
+      } else if(obj > max) {
+        clamped = max;
+      } else {
+        clamped = obj;
+      }
+      return cloneRangeMember(clamped);
     }
 
   });
 
+
   /***
-   * @method each[Unit]([fn])
-   * @returns Date
-   * @short Increments through the date range for each [unit], calling [fn] if it is passed. Returns an array of each increment visited.
-   *
-   * @set
-   *   eachMillisecond
-   *   eachSecond
-   *   eachMinute
-   *   eachHour
-   *   eachDay
-   *   eachWeek
-   *   eachMonth
-   *   eachYear
-   *
+   * Number module
+   ***
+   * @method Number.range([start], [end])
+   * @returns Range
+   * @short Creates a new range between [start] and [end]. See @ranges for more.
    * @example
    *
-   *   Date.range('2003-01', '2003-02').eachMonth()     -> [...]
-   *   Date.range('2003-01-15', '2003-01-16').eachDay() -> [...]
+   *   Number.range(5, 10)
+   *
+   ***
+   * String module
+   ***
+   * @method String.range([start], [end])
+   * @returns Range
+   * @short Creates a new range between [start] and [end]. See @ranges for more.
+   * @example
+   *
+   *   String.range('a', 'z')
+   *
+   ***
+   * Date module
+   ***
+   * @method Date.range([start], [end])
+   * @returns Range
+   * @short Creates a new range between [start] and [end].
+   * @extra If either [start] or [end] are null, they will default to the current date. See @ranges for more.
+   * @example
+   *
+   *   Date.range('today', 'tomorrow')
    *
    ***/
-  extendSimilar(DateRange, true, false, 'Millisecond,Second,Minute,Hour,Day,Week,Month,Year', function(methods, name) {
-    methods['each' + name] = function(fn) { return this.every(name, fn); }
+  [number, string, date].forEach(function(klass) {
+     extend(klass, false, true, {
+
+      'range': function(start, end) {
+        if(klass.create) {
+          start = klass.create(start);
+          end   = klass.create(end);
+        }
+        return new Range(start, end);
+      }
+
+    });
+
+  });
+
+  /***
+   * Number module
+   *
+   ***/
+
+  extend(number, true, true, {
+
+    /***
+     * @method upto(<num>, [fn], [step] = 1)
+     * @returns Array
+     * @short Returns an array containing numbers from the number up to <num>.
+     * @extra Optionally calls [fn] callback for each number in that array. [step] allows multiples greater than 1.
+     * @example
+     *
+     *   (2).upto(6) -> [2, 3, 4, 5, 6]
+     *   (2).upto(6, function(n) {
+     *     // This function is called 5 times receiving n as the value.
+     *   });
+     *   (2).upto(8, null, 2) -> [2, 4, 6, 8]
+     *
+     ***/
+    'upto': function(num, fn, step) {
+      return number.range(this, num).every(step, fn);
+    },
+
+     /***
+     * @method clamp([start] = Infinity, [end] = Infinity)
+     * @returns Number
+     * @short Constrains the number so that it is between [start] and [end].
+     * @extra This will build a range object that has an equivalent %clamp% method.
+     * @example
+     *
+     *   (3).clamp(50, 100)  -> 50
+     *   (85).clamp(50, 100) -> 85
+     *
+     ***/
+    'clamp': function(start, end) {
+      return new Range(start, end).clamp(this);
+    },
+
+     /***
+     * @method cap([max] = Infinity)
+     * @returns Number
+     * @short Constrains the number so that it is no greater than [max].
+     * @extra This will build a range object that has an equivalent %cap% method.
+     * @example
+     *
+     *   (100).cap(80) -> 80
+     *
+     ***/
+    'cap': function(max) {
+      return this.clamp(Undefined, max);
+    }
+
+  });
+
+  extend(number, true, true, {
+
+    /***
+     * @method downto(<num>, [fn], [step] = 1)
+     * @returns Array
+     * @short Returns an array containing numbers from the number down to <num>.
+     * @extra Optionally calls [fn] callback for each number in that array. [step] allows multiples greater than 1.
+     * @example
+     *
+     *   (8).downto(3) -> [8, 7, 6, 5, 4, 3]
+     *   (8).downto(3, function(n) {
+     *     // This function is called 6 times receiving n as the value.
+     *   });
+     *   (8).downto(2, null, 2) -> [8, 6, 4, 2]
+     *
+     ***/
+    'downto': number.prototype.upto
+
   });
 
 
   /***
-   * Date module
+   * Array module
+   *
    ***/
 
-  extend(date, false, false, {
+  extend(array, false, function(a) { return a instanceof Range; }, {
 
-     /***
-     * @method Date.range([start], [end])
-     * @returns DateRange
-     * @short Creates a new date range.
-     * @extra If either [start] or [end] are null, they will default to the current date.
-     *
-     ***/
-    'range': function(start, end) {
-      return new DateRange(start, end);
+    'create': function(range) {
+      return range.every();
     }
 
   });
@@ -4532,23 +5285,28 @@
    ***/
 
   function setDelay(fn, ms, after, scope, args) {
-    var index;
+    // Delay of infinity is never called of course...
+    if(ms === Infinity) return;
     if(!fn.timers) fn.timers = [];
-    if(!isNumber(ms)) ms = 0;
+    if(!isNumber(ms)) ms = 1;
+    // This is a workaround for <= IE8, which apparently has the
+    // ability to call timeouts in the queue on the same tick (ms?)
+    // even if functionally they have already been cleared.
+    fn._canceled = false;
     fn.timers.push(setTimeout(function(){
-      fn.timers.splice(index, 1);
-      after.apply(scope, args || []);
+      if(!fn._canceled) {
+        after.apply(scope, args || []);
+      }
     }, ms));
-    index = fn.timers.length;
   }
 
-  extend(Function, true, false, {
+  extend(Function, true, true, {
 
      /***
-     * @method lazy([ms] = 1, [limit] = Infinity)
+     * @method lazy([ms] = 1, [immediate] = false, [limit] = Infinity)
      * @returns Function
-     * @short Creates a lazy function that, when called repeatedly, will queue execution and wait [ms] milliseconds to execute again.
-     * @extra Lazy functions will always execute as many times as they are called up to [limit], after which point subsequent calls will be ignored (if it is set to a finite number). Compare this to %throttle%, which will execute only once per [ms] milliseconds. %lazy% is useful when you need to be sure that every call to a function is executed, but in a non-blocking manner. Calling %cancel% on a lazy function will clear the entire queue. Note that [ms] can also be a fraction.
+     * @short Creates a lazy function that, when called repeatedly, will queue execution and wait [ms] milliseconds to execute.
+     * @extra If [immediate] is %true%, first execution will happen immediately, then lock. If [limit] is a fininte number, calls past [limit] will be ignored while execution is locked. Compare this to %throttle%, which will execute only once per [ms] milliseconds. Note that [ms] can also be a fraction. Calling %cancel% on a lazy function will clear the entire queue. For more see @functions.
      * @example
      *
      *   (function() {
@@ -4559,62 +5317,56 @@
      *   }.lazy(20));
      *   (100).times(function() {
      *     // Executes 50 times, with each execution 20ms later than the last.
-     *   }.lazy(20, 50));
+     *   }.lazy(20, false, 50));
      *
      ***/
-    'lazy': function(ms, limit) {
-      var fn = this, queue = [], lock = false, execute, rounded, perExecution;
+    'lazy': function(ms, immediate, limit) {
+      var fn = this, queue = [], locked = false, execute, rounded, perExecution, result;
       ms = ms || 1;
       limit = limit || Infinity;
       rounded = ceil(ms);
-      perExecution = round(rounded / ms);
+      perExecution = round(rounded / ms) || 1;
       execute = function() {
-        if(lock || queue.length == 0) return;
-        var max = math.max(queue.length - perExecution, 0);
-        while(queue.length > max) {
+        var queueLength = queue.length, maxPerRound;
+        if(queueLength == 0) return;
+        // Allow fractions of a millisecond by calling
+        // multiple times per actual timeout execution
+        maxPerRound = max(queueLength - perExecution, 0);
+        while(queueLength > maxPerRound) {
           // Getting uber-meta here...
-          Function.prototype.apply.apply(fn, queue.shift());
+          result = Function.prototype.apply.apply(fn, queue.shift());
+          queueLength--;
         }
         setDelay(lazy, rounded, function() {
-          lock = false;
+          locked = false;
           execute();
         });
-        lock = true;
       }
       function lazy() {
-        // The first call is immediate, so having 1 in the queue
-        // implies two calls have already taken place.
-        if(lock && queue.length > limit - 2) return;
-        queue.push([this, arguments]);
-        execute();
+        // If the execution has locked and it's immediate, then
+        // allow 1 less in the queue as 1 call has already taken place.
+        if(queue.length < limit - (locked && immediate ? 1 : 0)) {
+          queue.push([this, arguments]);
+        }
+        if(!locked) {
+          locked = true;
+          if(immediate) {
+            execute();
+          } else {
+            setDelay(lazy, rounded, execute);
+          }
+        }
+        // Return the memoized result
+        return result;
       }
       return lazy;
     },
 
      /***
-     * @method delay([ms] = 0, [arg1], ...)
-     * @returns Function
-     * @short Executes the function after <ms> milliseconds.
-     * @extra Returns a reference to itself. %delay% is also a way to execute non-blocking operations that will wait until the CPU is free. Delayed functions can be canceled using the %cancel% method. Can also curry arguments passed in after <ms>.
-     * @example
-     *
-     *   (function(arg1) {
-     *     // called 1s later
-     *   }).delay(1000, 'arg1');
-     *
-     ***/
-    'delay': function(ms) {
-      var fn = this;
-      var args = multiArgs(arguments).slice(1);
-      setDelay(fn, ms, fn, fn, args);
-      return fn;
-    },
-
-     /***
-     * @method throttle(<ms>)
+     * @method throttle([ms] = 1)
      * @returns Function
      * @short Creates a "throttled" version of the function that will only be executed once per <ms> milliseconds.
-     * @extra This is functionally equivalent to calling %lazy% with a [limit] of %1%. %throttle% is appropriate when you want to make sure a function is only executed at most once for a given duration. Compare this to %lazy%, which will queue rapid calls and execute them later.
+     * @extra This is functionally equivalent to calling %lazy% with a [limit] of %1% and [immediate] as %true%. %throttle% is appropriate when you want to make sure a function is only executed at most once for a given duration. For more see @functions.
      * @example
      *
      *   (3).times(function() {
@@ -4623,14 +5375,14 @@
      *
      ***/
     'throttle': function(ms) {
-      return this.lazy(ms, 1);
+      return this.lazy(ms, true, 1);
     },
 
      /***
-     * @method debounce(<ms>)
+     * @method debounce([ms] = 1)
      * @returns Function
      * @short Creates a "debounced" function that postpones its execution until after <ms> milliseconds have passed.
-     * @extra This method is useful to execute a function after things have "settled down". A good example of this is when a user tabs quickly through form fields, execution of a heavy operation should happen after a few milliseconds when they have "settled" on a field.
+     * @extra This method is useful to execute a function after things have "settled down". A good example of this is when a user tabs quickly through form fields, execution of a heavy operation should happen after a few milliseconds when they have "settled" on a field. For more see @functions.
      * @example
      *
      *   var fn = (function(arg1) {
@@ -4648,6 +5400,48 @@
     },
 
      /***
+     * @method delay([ms] = 1, [arg1], ...)
+     * @returns Function
+     * @short Executes the function after <ms> milliseconds.
+     * @extra Returns a reference to itself. %delay% is also a way to execute non-blocking operations that will wait until the CPU is free. Delayed functions can be canceled using the %cancel% method. Can also curry arguments passed in after <ms>.
+     * @example
+     *
+     *   (function(arg1) {
+     *     // called 1s later
+     *   }).delay(1000, 'arg1');
+     *
+     ***/
+    'delay': function(ms) {
+      var fn = this;
+      var args = multiArgs(arguments, null, 1);
+      setDelay(fn, ms, fn, fn, args);
+      return fn;
+    },
+
+     /***
+     * @method every([ms] = 1, [arg1], ...)
+     * @returns Function
+     * @short Executes the function every <ms> milliseconds.
+     * @extra Returns a reference to itself. Repeating functions with %every% can be canceled using the %cancel% method. Can also curry arguments passed in after <ms>.
+     * @example
+     *
+     *   (function(arg1) {
+     *     // called every 1s
+     *   }).every(1000, 'arg1');
+     *
+     ***/
+    'every': function(ms) {
+      var fn = this, args = arguments;
+      args = args.length > 1 ? multiArgs(args, null, 1) : [];
+      function execute () {
+        fn.apply(fn, args);
+        setDelay(fn, ms, execute);
+      }
+      setDelay(fn, ms, execute);
+      return fn;
+    },
+
+     /***
      * @method cancel()
      * @returns Function
      * @short Cancels a delayed function scheduled to be run.
@@ -4660,11 +5454,13 @@
      *
      ***/
     'cancel': function() {
-      if(isArray(this.timers)) {
-        while(this.timers.length > 0) {
-          clearTimeout(this.timers.shift());
+      var timers = this.timers, timer;
+      if(isArray(timers)) {
+        while(timer = timers.shift()) {
+          clearTimeout(timer);
         }
       }
+      this._canceled = true;
       return this;
     },
 
@@ -4714,10 +5510,7 @@
      *
      ***/
     'once': function() {
-      var fn = this;
-      return function() {
-        return hasOwnProperty(fn, 'memo') ? fn['memo'] : fn['memo'] = fn.apply(this, arguments);
-      }
+      return this.throttle(Infinity, true);
     },
 
      /***
@@ -4765,19 +5558,19 @@
     if(significant > 0) {
       significant -= 1;
     }
-    i = math.max(math.min((significant / 3).floor(), limit === false ? str.length : limit), -mid);
+    i = max(min(floor(significant / 3), limit === false ? str.length : limit), -mid);
     unit = str.charAt(i + mid - 1);
     if(significant < -9) {
       i = -3;
-      roundTo = significant.abs() - 9;
+      roundTo = abs(significant) - 9;
       unit = str.slice(0,1);
     }
-    divisor = bytes ? (2).pow(10 * i) : (10).pow(i * 3);
-    return (num / divisor).round(roundTo || 0).format() + unit.trim();
+    divisor = bytes ? pow(2, 10 * i) : pow(10, i * 3);
+    return withPrecision(num / divisor, roundTo || 0).format() + unit.trim();
   }
 
 
-  extend(number, false, false, {
+  extend(number, false, true, {
 
     /***
      * @method Number.random([n1], [n2])
@@ -4792,16 +5585,16 @@
      *
      ***/
     'random': function(n1, n2) {
-      var min, max;
+      var minNum, maxNum;
       if(arguments.length == 1) n2 = n1, n1 = 0;
-      min = math.min(n1 || 0, isUndefined(n2) ? 1 : n2);
-      max = math.max(n1 || 0, isUndefined(n2) ? 1 : n2) + 1;
-      return floor((math.random() * (max - min)) + min);
+      minNum = min(n1 || 0, isUndefined(n2) ? 1 : n2);
+      maxNum = max(n1 || 0, isUndefined(n2) ? 1 : n2) + 1;
+      return floor((math.random() * (maxNum - minNum)) + minNum);
     }
 
   });
 
-  extend(number, true, false, {
+  extend(number, true, true, {
 
     /***
      * @method log(<base> = Math.E)
@@ -4950,7 +5743,7 @@
       if(isUndefined(decimal)) {
         decimal = '.';
       }
-      str      = (isNumber(place) ? round(this, place || 0).toFixed(math.max(place, 0)) : this.toString()).replace(/^-/, '');
+      str      = (isNumber(place) ? withPrecision(this, place || 0).toFixed(max(place, 0)) : this.toString()).replace(/^-/, '');
       split    = str.split('.');
       integer  = split[0];
       fraction = split[1];
@@ -4958,10 +5751,10 @@
         if(i < integer.length) {
           result = thousands + result;
         }
-        result = integer.slice(math.max(0, i - 3), i) + result;
+        result = integer.slice(max(0, i - 3), i) + result;
       }
       if(fraction) {
-        result += decimal + repeatString((place || 0) - fraction.length, '0') + fraction;
+        result += decimal + repeatString('0', (place || 0) - fraction.length) + fraction;
       }
       return (this < 0 ? '-' : '') + result;
     },
@@ -4980,42 +5773,6 @@
      ***/
     'hex': function(pad) {
       return this.pad(pad || 1, false, 16);
-    },
-
-    /***
-     * @method upto(<num>, [fn], [step] = 1)
-     * @returns Array
-     * @short Returns an array containing numbers from the number up to <num>.
-     * @extra Optionally calls [fn] callback for each number in that array. [step] allows multiples greater than 1.
-     * @example
-     *
-     *   (2).upto(6) -> [2, 3, 4, 5, 6]
-     *   (2).upto(6, function(n) {
-     *     // This function is called 5 times receiving n as the value.
-     *   });
-     *   (2).upto(8, null, 2) -> [2, 4, 6, 8]
-     *
-     ***/
-    'upto': function(num, fn, step) {
-      return getRange(this, num, fn, step || 1);
-    },
-
-    /***
-     * @method downto(<num>, [fn], [step] = 1)
-     * @returns Array
-     * @short Returns an array containing numbers from the number down to <num>.
-     * @extra Optionally calls [fn] callback for each number in that array. [step] allows multiples greater than 1.
-     * @example
-     *
-     *   (8).downto(3) -> [8, 7, 6, 5, 4, 3]
-     *   (8).downto(3, function(n) {
-     *     // This function is called 6 times receiving n as the value.
-     *   });
-     *   (8).downto(2, null, 2) -> [8, 6, 4, 2]
-     *
-     ***/
-    'downto': function(num, fn, step) {
-      return getRange(this, num, fn, -(step || 1));
     },
 
     /***
@@ -5080,7 +5837,7 @@
      *
      ***/
     'ordinalize': function() {
-      var suffix, num = this.abs(), last = parseInt(num.toString().slice(-2));
+      var suffix, num = abs(this), last = parseInt(num.toString().slice(-2));
       return this + getOrdinalizedSuffix(last);
     },
 
@@ -5161,12 +5918,17 @@
    ***/
 
   function buildNumber() {
-    extendSimilar(number, true, false, 'round,floor,ceil', function(methods, name) {
-      methods[name] = function(precision) {
-        return round(this, precision, name);
+    function createRoundingFunction(fn) {
+      return function (precision) {
+        return precision ? withPrecision(this, precision, fn) : fn(this);
       }
+    }
+    extend(number, true, true, {
+      'ceil':   createRoundingFunction(ceil),
+      'round':  createRoundingFunction(round),
+      'floor':  createRoundingFunction(floor)
     });
-    extendSimilar(number, true, false, 'abs,pow,sin,asin,cos,acos,tan,atan,exp,pow,sqrt', function(methods, name) {
+    extendSimilar(number, true, true, 'abs,pow,sin,asin,cos,acos,tan,atan,exp,pow,sqrt', function(methods, name) {
       methods[name] = function(a, b) {
         return math[name](this, a, b);
       }
@@ -5174,6 +5936,7 @@
   }
 
   buildNumber();
+
 
   /***
    * @package Object
@@ -5186,11 +5949,11 @@
    ***/
 
   var ObjectTypeMethods = 'isObject,isNaN'.split(',');
-  var ObjectHashMethods = 'keys,values,select,reject,each,merge,clone,equal,watch,tap,has'.split(',');
+  var ObjectHashMethods = 'keys,values,select,reject,each,merge,clone,equal,watch,tap,has,toQueryString'.split(',');
 
-  function setParamsObject(obj, param, value, deep) {
+  function setParamsObject(obj, param, value, castBoolean) {
     var reg = /^(.+?)(\[.*\])$/, paramIsArray, match, allKeys, key;
-    if(deep !== false && (match = param.match(reg))) {
+    if(match = param.match(reg)) {
       key = match[1];
       allKeys = match[2].replace(/^\[|\]$/g, '').split('][');
       allKeys.forEach(function(k) {
@@ -5203,22 +5966,44 @@
         key = k;
       });
       if(!key && paramIsArray) key = obj.length.toString();
-      setParamsObject(obj, key, value);
-    } else if(value.match(/^[+-]?\d+(\.\d+)?$/)) {
-      obj[param] = parseFloat(value);
-    } else if(value === 'true') {
+      setParamsObject(obj, key, value, castBoolean);
+    } else if(castBoolean && value === 'true') {
       obj[param] = true;
-    } else if(value === 'false') {
+    } else if(castBoolean && value === 'false') {
       obj[param] = false;
     } else {
       obj[param] = value;
     }
   }
 
+  function objectToQueryString(base, obj) {
+    var tmp;
+    // If a custom toString exists bail here and use that instead
+    if(isArray(obj) || (isObjectType(obj) && obj.toString === internalToString)) {
+      tmp = [];
+      iterateOverObject(obj, function(key, value) {
+        if(base) {
+          key = base + '[' + key + ']';
+        }
+        tmp.push(objectToQueryString(key, value));
+      });
+      return tmp.join('&');
+    } else {
+      if(!base) return '';
+      return sanitizeURIComponent(base) + '=' + (isDate(obj) ? obj.getTime() : sanitizeURIComponent(obj));
+    }
+  }
+
+  function sanitizeURIComponent(obj) {
+    // undefined, null, and NaN are represented as a blank string,
+    // while false and 0 are stringified. "+" is allowed in query string
+    return !obj && obj !== false && obj !== 0 ? '' : encodeURIComponent(obj).replace(/%20/g, '+');
+  }
+
   function matchKey(key, match) {
     if(isRegExp(match)) {
       return match.test(key);
-    } else if(isObjectPrimitive(match)) {
+    } else if(isObjectType(match)) {
       return hasOwnProperty(match, key);
     } else {
       return key === string(match);
@@ -5226,7 +6011,7 @@
   }
 
   function selectFromObject(obj, args, select) {
-    var result = {}, match;
+    var match, result = obj instanceof Hash ? new Hash : {};
     iterateOverObject(obj, function(key, value) {
       match = false;
       flattenedArgs(args, function(arg) {
@@ -5268,12 +6053,10 @@
    *
    ***/
   function buildTypeMethods() {
-    extendSimilar(object, false, false, ClassNames, function(methods, name) {
+    extendSimilar(object, false, true, ClassNames, function(methods, name) {
       var method = 'is' + name;
       ObjectTypeMethods.push(method);
-      methods[method] = function(obj) {
-        return className(obj) === '[object '+name+']';
-      }
+      methods[method] = typeChecks[name];
     });
   }
 
@@ -5294,7 +6077,7 @@
        * @method watch(<obj>, <prop>, <fn>)
        * @returns Nothing
        * @short Watches a property of <obj> and runs <fn> when it changes.
-       * @extra <fn> is passed three arguments: the property <prop>, the old value, and the new value. The return value of [fn] will be set as the new value. This method is useful for things such as validating or cleaning the value when it is set. Warning: this method WILL NOT work in browsers that don't support %Object.defineProperty%. This notably includes IE 8 and below, and Opera. This is the only method in Sugar that is not fully compatible with all browsers. %watch% is available as an instance method on extended objects.
+       * @extra <fn> is passed three arguments: the property <prop>, the old value, and the new value. The return value of [fn] will be set as the new value. This method is useful for things such as validating or cleaning the value when it is set. Warning: this method WILL NOT work in browsers that don't support %Object.defineProperty% (IE 8 and below). This is the only method in Sugar that is not fully compatible with all browsers. %watch% is available as an instance method on extended objects.
        * @example
        *
        *   Object.watch({ foo: 'bar' }, 'foo', function(prop, oldVal, newVal) {
@@ -5321,7 +6104,7 @@
     }
   });
 
-  extend(object, false, function(arg1, arg2) { return isFunction(arg2); }, {
+  extend(object, false, function() { return arguments.length > 1; }, {
 
     /***
      * @method keys(<obj>, [fn])
@@ -5347,10 +6130,10 @@
 
   });
 
-  extend(object, false, false, {
+  extend(object, false, true, {
 
     'isObject': function(obj) {
-      return isObject(obj);
+      return isPlainObject(obj);
     },
 
     'isNaN': function(obj) {
@@ -5406,17 +6189,18 @@
      *
      ***/
     'merge': function(target, source, deep, resolve) {
-      var key, val;
+      var key, val, goDeep;
       // Strings cannot be reliably merged thanks to
       // their properties not being enumerable in < IE8.
-      if(target && typeof source != 'string') {
+      if(target && typeof source !== 'string') {
         for(key in source) {
           if(!hasOwnProperty(source, key) || !target) continue;
-          val = source[key];
+          val    = source[key];
+          goDeep = deep && isObjectType(val);
           // Conflict!
           if(isDefined(target[key])) {
             // Do not merge.
-            if(resolve === false) {
+            if(resolve === false && !goDeep) {
               continue;
             }
             // Use the result of the callback as the result.
@@ -5425,7 +6209,7 @@
             }
           }
           // Deep merging.
-          if(deep === true && val && isObjectPrimitive(val)) {
+          if(goDeep) {
             if(isDate(val)) {
               val = new date(val.getTime());
             } else if(isRegExp(val)) {
@@ -5478,36 +6262,65 @@
      *
      ***/
     'clone': function(obj, deep) {
-      var target;
-      if(!isObjectPrimitive(obj)) return obj;
-      if (obj instanceof Hash) {
+      var target, klass;
+      if(!isObjectType(obj)) {
+        return obj;
+      }
+      klass = className(obj);
+      if(isDate(obj, klass) && obj.clone) {
+        // Preserve internal UTC flag when applicable.
+        return obj.clone();
+      } else if(isDate(obj, klass) || isRegExp(obj, klass)) {
+        return new obj.constructor(obj);
+      } else if(obj instanceof Hash) {
         target = new Hash;
+      } else if(isArray(obj, klass)) {
+        target = [];
+      } else if(isPlainObject(obj, klass)) {
+        target = {};
       } else {
-        target = new obj.constructor;
+        throw new TypeError('Clone must be a basic data type.');
       }
       return object.merge(target, obj, deep);
     },
 
     /***
-     * @method Object.fromQueryString(<str>, [deep] = true)
+     * @method Object.fromQueryString(<str>, [booleans] = false)
      * @returns Object
      * @short Converts the query string of a URL into an object.
-     * @extra If [deep] is %false%, conversion will only accept shallow params (ie. no object or arrays with %[]% syntax) as these are not universally supported.
+     * @extra If [booleans] is true, then %"true"% and %"false"% will be cast into booleans. All other values, including numbers will remain their string values.
      * @example
      *
      *   Object.fromQueryString('foo=bar&broken=wear') -> { foo: 'bar', broken: 'wear' }
-     *   Object.fromQueryString('foo[]=1&foo[]=2')     -> { foo: [1,2] }
+     *   Object.fromQueryString('foo[]=1&foo[]=2')     -> { foo: ['1','2'] }
+     *   Object.fromQueryString('foo=true', true)      -> { foo: true }
      *
      ***/
-    'fromQueryString': function(str, deep) {
+    'fromQueryString': function(str, castBoolean) {
       var result = object.extended(), split;
       str = str && str.toString ? str.toString() : '';
       str.replace(/^.*?\?/, '').split('&').forEach(function(p) {
         var split = p.split('=');
         if(split.length !== 2) return;
-        setParamsObject(result, split[0], decodeURIComponent(split[1]), deep);
+        setParamsObject(result, split[0], decodeURIComponent(split[1]), castBoolean);
       });
       return result;
+    },
+
+    /***
+     * @method Object.toQueryString(<obj>, [namespace] = null)
+     * @returns Object
+     * @short Converts the object into a query string.
+     * @extra Accepts deep nested objects and arrays. If [namespace] is passed, it will be prefixed to all param names.
+     * @example
+     *
+     *   Object.toQueryString({foo:'bar'})          -> 'foo=bar'
+     *   Object.toQueryString({foo:['a','b','c']})  -> 'foo[0]=a&foo[1]=b&foo[2]=c'
+     *   Object.toQueryString({name:'Bob'}, 'user') -> 'user[name]=Bob'
+     *
+     ***/
+    'toQueryString': function(obj, namespace) {
+      return objectToQueryString(namespace, obj);
     },
 
     /***
@@ -5594,7 +6407,6 @@
   buildObjectExtend();
   buildObjectInstanceMethods(ObjectHashMethods, Hash);
 
-
   /***
    * @package RegExp
    * @dependency core
@@ -5606,11 +6418,7 @@
    *
    ***/
 
-  function uniqueRegExpFlags(flags) {
-    return flags.split('').sort().join('').replace(/([gimy])\1+/g, '$1');
-  }
-
-  extend(regexp, false, false, {
+  extend(regexp, false, true, {
 
    /***
     * @method RegExp.escape(<str> = '')
@@ -5629,7 +6437,7 @@
 
   });
 
-  extend(regexp, true, false, {
+  extend(regexp, true, true, {
 
    /***
     * @method getFlags()
@@ -5702,26 +6510,69 @@
     }
   }
 
-  function padString(str, p, left, right) {
-    var padding = string(p);
-    if(padding != p) {
-      padding = '';
+  function checkRepeatRange(num) {
+    num = +num;
+    if(num < 0 || num === Infinity) {
+      throw new RangeError('Invalid number');
     }
-    if(!isNumber(left))  left = 1;
-    if(!isNumber(right)) right = 1;
-    return padding.repeat(left) + str + padding.repeat(right);
+    return num;
   }
 
-  function chr(num) {
-    return string.fromCharCode(num);
+  function padString(num, padding) {
+    return repeatString(isDefined(padding) ? padding : ' ', num);
+  }
+
+  function truncateString(str, length, from, ellipsis, split) {
+    var str1, str2, len1, len2;
+    if(str.length <= length) {
+      return str.toString();
+    }
+    ellipsis = isUndefined(ellipsis) ? '...' : ellipsis;
+    switch(from) {
+      case 'left':
+        str2 = split ? truncateOnWord(str, length, true) : str.slice(str.length - length);
+        return ellipsis + str2;
+      case 'middle':
+        len1 = ceil(length / 2);
+        len2 = floor(length / 2);
+        str1 = split ? truncateOnWord(str, len1) : str.slice(0, len1);
+        str2 = split ? truncateOnWord(str, len2, true) : str.slice(str.length - len2);
+        return str1 + ellipsis + str2;
+      default:
+        str1 = split ? truncateOnWord(str, length) : str.slice(0, length);
+        return str1 + ellipsis;
+    }
+  }
+
+  function truncateOnWord(str, limit, fromLeft) {
+    if(fromLeft) {
+      return truncateOnWord(str.reverse(), limit).reverse();
+    }
+    var reg = regexp('(?=[' + getTrimmableCharacters() + '])');
+    var words = str.split(reg);
+    var count = 0;
+    return words.filter(function(word) {
+      count += word.length;
+      return count <= limit;
+    }).join('');
+  }
+
+  function numberOrIndex(str, n, from) {
+    if(isString(n)) {
+      n = str.indexOf(n);
+      if(n === -1) {
+        n = from ? str.length : 0;
+      }
+    }
+    return n;
   }
 
   var btoa, atob;
 
   function buildBase64(key) {
-    if(this.btoa) {
-      btoa = this.btoa;
-      atob = this.atob;
+    if(globalContext.btoa) {
+      btoa = globalContext.btoa;
+      atob = globalContext.atob;
       return;
     }
     var base64reg = /[^A-Za-z0-9\+\/\=]/g;
@@ -5780,6 +6631,24 @@
     }
   }
 
+  extend(string, true, false, {
+    /***
+     * @method repeat([num] = 0)
+     * @returns String
+     * @short Returns the string repeated [num] times.
+     * @example
+     *
+     *   'jumpy'.repeat(2) -> 'jumpyjumpy'
+     *   'a'.repeat(5)     -> 'aaaaa'
+     *   'a'.repeat(0)     -> ''
+     *
+     ***/
+    'repeat': function(num) {
+      num = checkRepeatRange(num);
+      return repeatString(this, num);
+    }
+
+  });
 
   extend(string, true, function(reg) { return isRegExp(reg) || arguments.length > 2; }, {
 
@@ -5797,8 +6666,8 @@
      *   'hello'.startsWith('HELL', 0, false) -> true
      *
      ***/
-    'startsWith': function(reg, pos, c) {
-      var str = this, source;
+    'startsWith': function(reg) {
+      var args = arguments, pos = args[1], c = args[2], str = this, source;
       if(pos) str = str.slice(pos);
       if(isUndefined(c)) c = true;
       source = isRegExp(reg) ? reg.source.replace('^', '') : escapeRegExp(reg);
@@ -5819,8 +6688,8 @@
      *   'jumpy'.endsWith('MPY', 5, false) -> true
      *
      ***/
-    'endsWith': function(reg, pos, c) {
-      var str = this, source;
+    'endsWith': function(reg) {
+      var args = arguments, pos = args[1], c = args[2], str = this, source;
       if(isDefined(pos)) str = str.slice(0, pos);
       if(isUndefined(c)) c = true;
       source = isRegExp(reg) ? reg.source.replace('$', '') : escapeRegExp(reg);
@@ -5829,8 +6698,7 @@
 
   });
 
-
-  extend(string, true, false, {
+  extend(string, true, true, {
 
      /***
       * @method escapeRegExp()
@@ -5907,19 +6775,19 @@
       *
       ***/
     'unescapeHTML': function() {
-      return this.replace(/&amp;/g,  '&')
-                 .replace(/&lt;/g,   '<')
+      return this.replace(/&lt;/g,   '<')
                  .replace(/&gt;/g,   '>')
                  .replace(/&quot;/g, '"')
                  .replace(/&apos;/g, "'")
-                 .replace(/&#x2f;/g, '/');
+                 .replace(/&#x2f;/g, '/')
+                 .replace(/&amp;/g,  '&');
     },
 
      /***
       * @method encodeBase64()
       * @returns String
       * @short Encodes the string into base64 encoding.
-      * @extra This method wraps the browser native %btoa% when available, and uses a custom implementation when not available.
+      * @extra This method wraps the browser native %btoa% when available, and uses a custom implementation when not available. It can also handle Unicode string encodings.
       * @example
       *
       *   'gonna get encoded!'.encodeBase64()  -> 'Z29ubmEgZ2V0IGVuY29kZWQh'
@@ -5927,14 +6795,14 @@
       *
       ***/
     'encodeBase64': function() {
-      return btoa(this);
+      return btoa(unescape(encodeURIComponent(this)));
     },
 
      /***
       * @method decodeBase64()
       * @returns String
       * @short Decodes the string from base64 encoding.
-      * @extra This method wraps the browser native %atob% when available, and uses a custom implementation when not available.
+      * @extra This method wraps the browser native %atob% when available, and uses a custom implementation when not available. It can also handle Unicode string encodings.
       * @example
       *
       *   'aHR0cDovL3R3aXR0ZXIuY29tLw=='.decodeBase64() -> 'http://twitter.com/'
@@ -5942,7 +6810,7 @@
       *
       ***/
     'decodeBase64': function() {
-      return atob(this);
+      return decodeURIComponent(escape(atob(this)));
     },
 
     /***
@@ -5960,7 +6828,7 @@
      *
      ***/
     'each': function(search, fn) {
-      var match, i;
+      var match, i, len;
       if(isFunction(search)) {
         fn = search;
         search = /[\s\S]/g;
@@ -5973,7 +6841,7 @@
       }
       match = this.match(search) || [];
       if(fn) {
-        for(i = 0; i < match.length; i++) {
+        for(i = 0, len = match.length; i < len; i++) {
           match[i] = fn.call(this, match[i], i, match) || match[i];
         }
       }
@@ -6012,8 +6880,8 @@
      *
      ***/
     'codes': function(fn) {
-      var codes = [];
-      for(var i=0; i<this.length; i++) {
+      var codes = [], i, len;
+      for(i = 0, len = this.length; i < len; i++) {
         var code = this.charCodeAt(i);
         codes.push(code);
         if(fn) fn.call(this, code, i);
@@ -6202,7 +7070,7 @@
      *
      ***/
     'at': function() {
-      return entryAtIndex(this, arguments, true);
+      return getEntriesForIndexes(this, arguments, true);
     },
 
     /***
@@ -6215,8 +7083,8 @@
      *   'lucky charms'.from(7)  -> 'harms'
      *
      ***/
-    'from': function(num) {
-      return this.slice(num);
+    'from': function(from) {
+      return this.slice(numberOrIndex(this, from, true));
     },
 
     /***
@@ -6229,9 +7097,9 @@
      *   'lucky charms'.to(7)  -> 'lucky ch'
      *
      ***/
-    'to': function(num) {
-      if(isUndefined(num)) num = this.length;
-      return this.slice(0, num);
+    'to': function(to) {
+      if(isUndefined(to)) to = this.length;
+      return this.slice(0, numberOrIndex(this, to));
     },
 
     /***
@@ -6344,58 +7212,40 @@
     },
 
     /***
-     * @method truncate(<length>, [split] = true, [from] = 'right', [ellipsis] = '...')
-     * @returns Object
+     * @method truncate(<length>, [from] = 'right', [ellipsis] = '...')
+     * @returns String
      * @short Truncates a string.
-     * @extra If [split] is %false%, will not split words up, and instead discard the word where the truncation occurred. [from] can also be %"middle"% or %"left"%.
+     * @extra [from] can be %'right'%, %'left'%, or %'middle'%. If the string is shorter than <length>, [ellipsis] will not be added.
      * @example
      *
-     *   'just sittin on the dock of the bay'.truncate(20)                 -> 'just sittin on the do...'
-     *   'just sittin on the dock of the bay'.truncate(20, false)          -> 'just sittin on the...'
-     *   'just sittin on the dock of the bay'.truncate(20, true, 'middle') -> 'just sitt...of the bay'
-     *   'just sittin on the dock of the bay'.truncate(20, true, 'left')   -> '...the dock of the bay'
+     *   'sittin on the dock of the bay'.truncate(18)           -> 'just sittin on the do...'
+     *   'sittin on the dock of the bay'.truncate(18, 'left')   -> '...the dock of the bay'
+     *   'sittin on the dock of the bay'.truncate(18, 'middle') -> 'just sitt...of the bay'
      *
      ***/
-    'truncate': function(length, split, from, ellipsis) {
-      var pos,
-        prepend = '',
-        append = '',
-        str = this.toString(),
-        chars = '[' + getTrimmableCharacters() + ']+',
-        space = '[^' + getTrimmableCharacters() + ']*',
-        reg = regexp(chars + space + '$');
-      ellipsis = isUndefined(ellipsis) ? '...' : string(ellipsis);
-      if(str.length <= length) {
-        return str;
-      }
-      switch(from) {
-        case 'left':
-          pos = str.length - length;
-          prepend = ellipsis;
-          str = str.slice(pos);
-          reg = regexp('^' + space + chars);
-          break;
-        case 'middle':
-          pos    = floor(length / 2);
-          append = ellipsis + str.slice(str.length - pos).trimLeft();
-          str    = str.slice(0, pos);
-          break;
-        default:
-          pos = length;
-          append = ellipsis;
-          str = str.slice(0, pos);
-      }
-      if(split === false && this.slice(pos, pos + 1).match(/\S/)) {
-        str = str.remove(reg);
-      }
-      return prepend + str + append;
+    'truncate': function(length, from, ellipsis) {
+      return truncateString(this, length, from, ellipsis);
     },
 
     /***
-     * @method pad[Side](<padding> = '', [num] = 1)
+     * @method truncateOnWord(<length>, [from] = 'right', [ellipsis] = '...')
      * @returns String
-     * @short Pads either/both sides of the string.
-     * @extra [num] is the number of characters on each side, and [padding] is the character to pad with.
+     * @short Truncates a string without splitting up words.
+     * @extra [from] can be %'right'%, %'left'%, or %'middle'%. If the string is shorter than <length>, [ellipsis] will not be added.
+     * @example
+     *
+     *   'here we go'.truncateOnWord(5)               -> 'here...'
+     *   'here we go'.truncateOnWord(5, 'left')       -> '...we go'
+     *
+     ***/
+    'truncateOnWord': function(length, from, ellipsis) {
+      return truncateString(this, length, from, ellipsis, true);
+    },
+
+    /***
+     * @method pad[Side](<num> = null, [padding] = ' ')
+     * @returns String
+     * @short Pads the string out with [padding] to be exactly <num> characters.
      *
      * @set
      *   pad
@@ -6404,22 +7254,29 @@
      *
      * @example
      *
-     *   'wasabi'.pad('-')         -> '-wasabi-'
-     *   'wasabi'.pad('-', 2)      -> '--wasabi--'
-     *   'wasabi'.padLeft('-', 2)  -> '--wasabi'
-     *   'wasabi'.padRight('-', 2) -> 'wasabi--'
+     *   'wasabi'.pad(8)           -> ' wasabi '
+     *   'wasabi'.padLeft(8)       -> '  wasabi'
+     *   'wasabi'.padRight(8)      -> 'wasabi  '
+     *   'wasabi'.padRight(8, '-') -> 'wasabi--'
      *
      ***/
-    'pad': function(padding, num) {
-      return repeatString(num, padding) + this + repeatString(num, padding);
+    'pad': function(num, padding) {
+      var half, front, back;
+      num   = checkRepeatRange(num);
+      half  = max(0, num - this.length) / 2;
+      front = floor(half);
+      back  = ceil(half);
+      return padString(front, padding) + this + padString(back, padding);
     },
 
-    'padLeft': function(padding, num) {
-      return repeatString(num, padding) + this;
+    'padLeft': function(num, padding) {
+      num = checkRepeatRange(num);
+      return padString(max(0, num - this.length), padding) + this;
     },
 
-    'padRight': function(padding, num) {
-      return this + repeatString(num, padding);
+    'padRight': function(num, padding) {
+      num = checkRepeatRange(num);
+      return this + padString(max(0, num - this.length), padding);
     },
 
     /***
@@ -6454,31 +7311,6 @@
     },
 
     /***
-     * @method repeat([num] = 0)
-     * @returns String
-     * @short Returns the string repeated [num] times.
-     * @example
-     *
-     *   'jumpy'.repeat(2) -> 'jumpyjumpy'
-     *   'a'.repeat(5)     -> 'aaaaa'
-     *   'a'.repeat(0)     -> ''
-     *
-     ***/
-    'repeat': function(num) {
-      var result = '', str = this;
-      if(!isNumber(num) || num < 1) return '';
-      while (num) {
-        if (num & 1) {
-          result += str;
-        }
-        if (num >>= 1) {
-          str += str;
-        }
-      }
-      return result;
-    },
-
-    /***
      * @method toNumber([base] = 10)
      * @returns Number
      * @short Converts the string into a number.
@@ -6492,14 +7324,13 @@
      *
      ***/
     'toNumber': function(base) {
-      var str = this.replace(/,/g, '');
-      return str.match(/\./) ? parseFloat(str) : parseInt(str, base || 10);
+      return stringToNumber(this, base);
     },
 
     /***
      * @method capitalize([all] = false)
      * @returns String
-     * @short Capitalizes the first character in the string.
+     * @short Capitalizes the first character in the string and downcases all other letters.
      * @extra If [all] is true, all words in the string will be capitalized.
      * @example
      *
@@ -6511,7 +7342,7 @@
      ***/
     'capitalize': function(all) {
       var lastResponded;
-      return this.toLowerCase().replace(all ? /[\s\S]/g : /^\S/, function(lower) {
+      return this.toLowerCase().replace(all ? /[^']/g : /^\S/, function(lower) {
         var upper = lower.toUpperCase(), result;
         result = lastResponded ? lower : upper;
         lastResponded = upper !== lower;
@@ -6522,8 +7353,8 @@
     /***
      * @method assign(<obj1>, <obj2>, ...)
      * @returns String
-     * @short Assigns variables to tokens in a string.
-     * @extra If an object is passed, it's properties can be assigned using the object's keys. If a non-object (string, number, etc.) is passed it can be accessed by the argument number beginning with 1 (as with regex tokens). Multiple objects can be passed and will be merged together (original objects are unaffected).
+     * @short Assigns variables to tokens in a string, demarcated with `{}`.
+     * @extra If an object is passed, it's properties can be assigned using the object's keys (i.e. {name}). If a non-object (string, number, etc.) is passed it can be accessed by the argument number beginning with {1} (as with regex tokens). Multiple objects can be passed and will be merged together (original objects are unaffected).
      * @example
      *
      *   'Welcome, Mr. {name}.'.assign({ name: 'Franklin' })   -> 'Welcome, Mr. Franklin.'
@@ -6533,8 +7364,8 @@
      ***/
     'assign': function() {
       var assign = {};
-      multiArgs(arguments, function(a, i) {
-        if(isObject(a)) {
+      flattenedArgs(arguments, function(a, i) {
+        if(isObjectType(a)) {
           simpleMerge(assign, a);
         } else {
           assign[i + 1] = a;
@@ -6543,32 +7374,14 @@
       return this.replace(/\{([^{]+?)\}/g, function(m, key) {
         return hasOwnProperty(assign, key) ? assign[key] : m;
       });
-    },
-
-    /***
-     * @method namespace([init] = global)
-     * @returns Mixed
-     * @short Finds the namespace or property indicated by the string.
-     * @extra [init] can be passed to provide a starting context, otherwise the global context will be used. If any level returns a falsy value, that will be the final result.
-     * @example
-     *
-     *   'Path.To.Namespace'.namespace() -> Path.To.Namespace
-     *   '$.fn'.namespace()              -> $.fn
-     *
-     ***/
-    'namespace': function(context) {
-      context = context || globalContext;
-      iterateOverObject(this.split('.'), function(i,s) {
-          return !!(context = context[s]);
-      });
-      return context;
     }
+
   });
 
 
   // Aliases
 
-  extend(string, true, false, {
+  extend(string, true, true, {
 
     /***
      * @method insert()
@@ -6871,7 +7684,6 @@
   Inflector.irregular('sex', 'sexes');
   Inflector.irregular('move', 'moves');
   Inflector.irregular('save', 'saves');
-  Inflector.irregular('save', 'saves');
   Inflector.irregular('cow', 'kine');
   Inflector.irregular('goose', 'geese');
   Inflector.irregular('zombie', 'zombies');
@@ -6879,7 +7691,7 @@
   Inflector.uncountable('equipment,information,rice,money,species,series,fish,sheep,jeans'.split(','));
 
 
-  extend(string, true, false, {
+  extend(string, true, true, {
 
     /***
      * @method pluralize()
@@ -6995,7 +7807,7 @@
    *
    * @package Language
    * @dependency string
-   * @description Normalizing accented characters, character width conversion, Hiragana and Katakana conversions.
+   * @description Detecting language by character block. Full-width <-> half-width character conversion. Hiragana and Katakana conversions.
    *
    ***/
 
@@ -7003,12 +7815,6 @@
    * String module
    *
    ***/
-
-
-
-  var NormalizeMap,
-      NormalizeReg = '',
-      NormalizeSource;
 
 
   /***
@@ -7096,14 +7902,16 @@
 
   // Support for converting character widths and katakana to hiragana.
 
+  var HALF_WIDTH_TO_FULL_WIDTH_TRAVERSAL = 65248;
+
   var widthConversionRanges = [
-    { type: 'a', shift: 65248, start: 65,  end: 90  },
-    { type: 'a', shift: 65248, start: 97,  end: 122 },
-    { type: 'n', shift: 65248, start: 48,  end: 57  },
-    { type: 'p', shift: 65248, start: 33,  end: 47  },
-    { type: 'p', shift: 65248, start: 58,  end: 64  },
-    { type: 'p', shift: 65248, start: 91,  end: 96  },
-    { type: 'p', shift: 65248, start: 123, end: 126 }
+    { type: 'a', start: 65,  end: 90  },
+    { type: 'a', start: 97,  end: 122 },
+    { type: 'n', start: 48,  end: 57  },
+    { type: 'p', start: 33,  end: 47  },
+    { type: 'p', start: 58,  end: 64  },
+    { type: 'p', start: 91,  end: 96  },
+    { type: 'p', start: 123, end: 126 }
   ];
 
   var WidthConversionTable;
@@ -7138,8 +7946,9 @@
       'hankaku': {}
     };
     widthConversionRanges.forEach(function(r) {
-      getRange(r.start, r.end, function(n) {
-        setWidthConversion(r.type, chr(n), chr(n + r.shift));
+      simpleRepeat(r.end - r.start + 1, function(n) {
+        n += r.start;
+        setWidthConversion(r.type, chr(n), chr(n + HALF_WIDTH_TO_FULL_WIDTH_TRAVERSAL));
       });
     });
     zenkakuKatakana.each(function(c, i) {
@@ -7166,128 +7975,7 @@
   }
 
 
-
-
-  function buildNormalizeMap() {
-    NormalizeMap = {};
-    iterateOverObject(NormalizeSource, function(normalized, str) {
-      str.split('').forEach(function(character) {
-        NormalizeMap[character] = normalized;
-      });
-      NormalizeReg += str;
-    });
-    NormalizeReg = regexp('[' + NormalizeReg + ']', 'g');
-  }
-
-  NormalizeSource = {
-    'A':  'AⒶＡÀÁÂẦẤẪẨÃĀĂẰẮẴẲȦǠÄǞẢÅǺǍȀȂẠẬẶḀĄȺⱯ',
-    'B':  'BⒷＢḂḄḆɃƂƁ',
-    'C':  'CⒸＣĆĈĊČÇḈƇȻꜾ',
-    'D':  'DⒹＤḊĎḌḐḒḎĐƋƊƉꝹ',
-    'E':  'EⒺＥÈÉÊỀẾỄỂẼĒḔḖĔĖËẺĚȄȆẸỆȨḜĘḘḚƐƎ',
-    'F':  'FⒻＦḞƑꝻ',
-    'G':  'GⒼＧǴĜḠĞĠǦĢǤƓꞠꝽꝾ',
-    'H':  'HⒽＨĤḢḦȞḤḨḪĦⱧⱵꞍ',
-    'I':  'IⒾＩÌÍÎĨĪĬİÏḮỈǏȈȊỊĮḬƗ',
-    'J':  'JⒿＪĴɈ',
-    'K':  'KⓀＫḰǨḲĶḴƘⱩꝀꝂꝄꞢ',
-    'L':  'LⓁＬĿĹĽḶḸĻḼḺŁȽⱢⱠꝈꝆꞀ',
-    'M':  'MⓂＭḾṀṂⱮƜ',
-    'N':  'NⓃＮǸŃÑṄŇṆŅṊṈȠƝꞐꞤ',
-    'O':  'OⓄＯÒÓÔỒỐỖỔÕṌȬṎŌṐṒŎȮȰÖȪỎŐǑȌȎƠỜỚỠỞỢỌỘǪǬØǾƆƟꝊꝌ',
-    'P':  'PⓅＰṔṖƤⱣꝐꝒꝔ',
-    'Q':  'QⓆＱꝖꝘɊ',
-    'R':  'RⓇＲŔṘŘȐȒṚṜŖṞɌⱤꝚꞦꞂ',
-    'S':  'SⓈＳẞŚṤŜṠŠṦṢṨȘŞⱾꞨꞄ',
-    'T':  'TⓉＴṪŤṬȚŢṰṮŦƬƮȾꞆ',
-    'U':  'UⓊＵÙÚÛŨṸŪṺŬÜǛǗǕǙỦŮŰǓȔȖƯỪỨỮỬỰỤṲŲṶṴɄ',
-    'V':  'VⓋＶṼṾƲꝞɅ',
-    'W':  'WⓌＷẀẂŴẆẄẈⱲ',
-    'X':  'XⓍＸẊẌ',
-    'Y':  'YⓎＹỲÝŶỸȲẎŸỶỴƳɎỾ',
-    'Z':  'ZⓏＺŹẐŻŽẒẔƵȤⱿⱫꝢ',
-    'a':  'aⓐａẚàáâầấẫẩãāăằắẵẳȧǡäǟảåǻǎȁȃạậặḁąⱥɐ',
-    'b':  'bⓑｂḃḅḇƀƃɓ',
-    'c':  'cⓒｃćĉċčçḉƈȼꜿↄ',
-    'd':  'dⓓｄḋďḍḑḓḏđƌɖɗꝺ',
-    'e':  'eⓔｅèéêềếễểẽēḕḗĕėëẻěȅȇẹệȩḝęḙḛɇɛǝ',
-    'f':  'fⓕｆḟƒꝼ',
-    'g':  'gⓖｇǵĝḡğġǧģǥɠꞡᵹꝿ',
-    'h':  'hⓗｈĥḣḧȟḥḩḫẖħⱨⱶɥ',
-    'i':  'iⓘｉìíîĩīĭïḯỉǐȉȋịįḭɨı',
-    'j':  'jⓙｊĵǰɉ',
-    'k':  'kⓚｋḱǩḳķḵƙⱪꝁꝃꝅꞣ',
-    'l':  'lⓛｌŀĺľḷḹļḽḻſłƚɫⱡꝉꞁꝇ',
-    'm':  'mⓜｍḿṁṃɱɯ',
-    'n':  'nⓝｎǹńñṅňṇņṋṉƞɲŉꞑꞥ',
-    'o':  'oⓞｏòóôồốỗổõṍȭṏōṑṓŏȯȱöȫỏőǒȍȏơờớỡởợọộǫǭøǿɔꝋꝍɵ',
-    'p':  'pⓟｐṕṗƥᵽꝑꝓꝕ',
-    'q':  'qⓠｑɋꝗꝙ',
-    'r':  'rⓡｒŕṙřȑȓṛṝŗṟɍɽꝛꞧꞃ',
-    's':  'sⓢｓśṥŝṡšṧṣṩșşȿꞩꞅẛ',
-    't':  'tⓣｔṫẗťṭțţṱṯŧƭʈⱦꞇ',
-    'u':  'uⓤｕùúûũṹūṻŭüǜǘǖǚủůűǔȕȗưừứữửựụṳųṷṵʉ',
-    'v':  'vⓥｖṽṿʋꝟʌ',
-    'w':  'wⓦｗẁẃŵẇẅẘẉⱳ',
-    'x':  'xⓧｘẋẍ',
-    'y':  'yⓨｙỳýŷỹȳẏÿỷẙỵƴɏỿ',
-    'z':  'zⓩｚźẑżžẓẕƶȥɀⱬꝣ',
-    'AA': 'Ꜳ',
-    'AE': 'ÆǼǢ',
-    'AO': 'Ꜵ',
-    'AU': 'Ꜷ',
-    'AV': 'ꜸꜺ',
-    'AY': 'Ꜽ',
-    'DZ': 'ǱǄ',
-    'Dz': 'ǲǅ',
-    'LJ': 'Ǉ',
-    'Lj': 'ǈ',
-    'NJ': 'Ǌ',
-    'Nj': 'ǋ',
-    'OI': 'Ƣ',
-    'OO': 'Ꝏ',
-    'OU': 'Ȣ',
-    'TZ': 'Ꜩ',
-    'VY': 'Ꝡ',
-    'aa': 'ꜳ',
-    'ae': 'æǽǣ',
-    'ao': 'ꜵ',
-    'au': 'ꜷ',
-    'av': 'ꜹꜻ',
-    'ay': 'ꜽ',
-    'dz': 'ǳǆ',
-    'hv': 'ƕ',
-    'lj': 'ǉ',
-    'nj': 'ǌ',
-    'oi': 'ƣ',
-    'ou': 'ȣ',
-    'oo': 'ꝏ',
-    'ss': 'ß',
-    'tz': 'ꜩ',
-    'vy': 'ꝡ'
-  };
-
-  extend(string, true, false, {
-    /***
-     * @method normalize()
-     * @returns String
-     * @short Returns the string with accented and non-standard Latin-based characters converted into ASCII approximate equivalents.
-     * @example
-     *
-     *   'á'.normalize()                  -> 'a'
-     *   'Ménage à trois'.normalize()     -> 'Menage a trois'
-     *   'Volkswagen'.normalize()         -> 'Volkswagen'
-     *   'ＦＵＬＬＷＩＤＴＨ'.normalize() -> 'FULLWIDTH'
-     *
-     ***/
-    'normalize': function() {
-      if(!NormalizeMap) {
-        buildNormalizeMap();
-      }
-      return this.replace(NormalizeReg, function(character) {
-        return NormalizeMap[character];
-      });
-    },
+  extend(string, true, true, {
 
     /***
      * @method hankaku([mode] = 'all')
@@ -7583,12 +8271,12 @@ Date.addLocale('es', {
   'weekdays': 'domingo,lunes,martes,miércoles|miercoles,jueves,viernes,sábado|sabado',
   'units': 'milisegundo:|s,segundo:|s,minuto:|s,hora:|s,día|días|dia|dias,semana:|s,mes:|es,año|años|ano|anos',
   'numbers': 'uno,dos,tres,cuatro,cinco,seis,siete,ocho,nueve,diez',
-  'tokens': 'el,de',
+  'tokens': 'el,la,de',
   'short':'{d} {month} {yyyy}',
   'long': '{d} {month} {yyyy} {H}:{mm}',
   'full': '{Weekday} {d} {month} {yyyy} {H}:{mm}:{ss}',
   'past': '{sign} {num} {unit}',
-  'future': '{num} {unit} {sign}',
+  'future': '{sign} {num} {unit}',
   'duration': '{num} {unit}',
   'timeMarker': 'a las',
   'ampm': 'am,pm',
@@ -7598,20 +8286,20 @@ Date.addLocale('es', {
     { 'name': 'day', 'src': 'hoy', 'value': 0 },
     { 'name': 'day', 'src': 'mañana|manana', 'value': 1 },
     { 'name': 'sign', 'src': 'hace', 'value': -1 },
-    { 'name': 'sign', 'src': 'de ahora', 'value': 1 },
+    { 'name': 'sign', 'src': 'dentro de', 'value': 1 },
     { 'name': 'shift', 'src': 'pasad:o|a', 'value': -1 },
     { 'name': 'shift', 'src': 'próximo|próxima|proximo|proxima', 'value': 1 }
   ],
   'dateParse': [
     '{sign} {num} {unit}',
     '{num} {unit} {sign}',
-    '{0?} {unit=5-7} {shift}',
-    '{0?} {shift} {unit=5-7}'
+    '{0?}{1?} {unit=5-7} {shift}',
+    '{0?}{1?} {shift} {unit=5-7}'
   ],
   'timeParse': [
     '{shift} {weekday}',
     '{weekday} {shift}',
-    '{date?} {1?} {month} {1?} {year?}'
+    '{date?} {2?} {month} {2?} {year?}'
   ]
 });
 Date.addLocale('fi', {
@@ -7719,7 +8407,7 @@ Date.addLocale('fr', {
   'weekdays': 'dimanche,lundi,mardi,mercredi,jeudi,vendredi,samedi',
   'units': 'milliseconde:|s,seconde:|s,minute:|s,heure:|s,jour:|s,semaine:|s,mois,an:|s|née|nee',
   'numbers': 'un:|e,deux,trois,quatre,cinq,six,sept,huit,neuf,dix',
-  'tokens': ["l'|la|le"],
+  'tokens': "l'|la|le",
   'short':'{d} {month} {yyyy}',
   'long': '{d} {month} {yyyy} {H}:{mm}',
   'full': '{Weekday} {d} {month} {yyyy} {H}:{mm}:{ss}',
@@ -7743,7 +8431,7 @@ Date.addLocale('fr', {
     '{0?} {unit=5-7} {shift}'
   ],
   'timeParse': [
-    '{0?} {date?} {month} {year?}',
+    '{weekday?} {0?} {date?} {month} {year?}',
     '{0?} {weekday} {shift}'
   ]
 });
@@ -8270,7 +8958,7 @@ Date.addLocale('ru', {
   'long': '{d} {month} {yyyy} года {H}:{mm}',
   'full': '{Weekday} {d} {month} {yyyy} года {H}:{mm}:{ss}',
   'relative': function(num, unit, ms, format) {
-    var numberWithUnit, last = num.toString().slice(-1);
+    var numberWithUnit, last = num.toString().slice(-1), mult;
     switch(true) {
       case num >= 11 && num <= 15: mult = 3; break;
       case last == 1: mult = 1; break;
@@ -8551,5 +9239,6 @@ Date.addLocale('zh-TW', {
     '{date}[日號]'
   ]
 });
+
 
 })();

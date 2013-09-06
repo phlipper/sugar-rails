@@ -12,15 +12,12 @@ fi
 
 # working paths
 copy_from="../Sugar/release"
-copy_to="vendor/assets/javascripts"
-
-# move the 'precompiled' directory
-cp -R $copy_from/$release/precompiled $copy_to
+copy_to="app/assets/javascripts"
 
 # move the full scripts
-cp $copy_from/$release/sugar-$release-full.development.js $copy_to/sugar-development.js
-cp $copy_from/$release/sugar-$release-full.min.js $copy_to/sugar-full.js
-cp $copy_from/$release/sugar-$release.min.js $copy_to/sugar.js
+cp $copy_from/sugar-full.development.js $copy_to/sugar-development.js
+cp $copy_from/sugar-full.min.js $copy_to/sugar-full.js
+cp $copy_from/sugar.min.js $copy_to/sugar.js
 
 # update the version identifier
 sed -i "" "s/SUGARJS_VERSION = \"[0-9\.]*\"/SUGARJS_VERSION = \"$release\"/" lib/sugar/rails/version.rb
