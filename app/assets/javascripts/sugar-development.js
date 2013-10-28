@@ -1,5 +1,5 @@
 /*
- *  Sugar Library v1.4.0
+ *  Sugar Library vedge
  *
  *  Freely distributable and licensed under the MIT-style license.
  *  Copyright (c) 2013 Andrew Plummer
@@ -4848,7 +4848,8 @@
       '{weekday} {2?} {shift} week',
       '{num} {unit=4-5} {sign} {day}',
       '{0?} {date}{1} of {month}',
-      '{0?}{month?} {date?}{1?} of {shift} {unit=6-7}'
+      '{0?}{month?} {date?}{1?} of {shift} {unit=6-7}',
+      '{edge} of {day}'
     ]
   });
 
@@ -4870,6 +4871,14 @@
    *
    ***/
 
+   var DATE_UNITS               = 'year|month|week|day|hour|minute|(?:milli)?second';
+   var FULL_CAPTURED_DURATION   = '((?:\\d+)?\\s*(?:' + DATE_UNITS + '))s?';
+   var RANGE_REG                = /(?:from)?\s*(.+)\s+(?:to|until)\s+(.+)$/i;
+   var DURATION_REG             = regexp('(\\d+)?\\s*('+ DATE_UNITS +')s?', 'i');
+   var RANGE_REG_FRONT_DURATION = regexp('(?:for)?\\s*'+ FULL_CAPTURED_DURATION +'\\s*(?:starting)?\\s*at\\s*(.+)', 'i');
+   var RANGE_REG_REAR_DURATION  = regexp('(.+)\\s*for\\s*' + FULL_CAPTURED_DURATION, 'i');
+
+
   function Range(start, end) {
     this.start = cloneRangeMember(start);
     this.end   = cloneRangeMember(end);
@@ -4882,6 +4891,31 @@
   function getRangeMemberPrimitiveValue(m) {
     if(m == null) return m;
     return isDate(m) ? m.getTime() : m.valueOf();
+  }
+
+  function getSimpleDate(str) {
+    // Needed as argument numbers are checked internally here.
+    return str == null ? new date() : new date(str);
+  }
+
+  function createRangeFromString(str) {
+    var match, datetime, duration, start, end;
+    if(match = str.match(RANGE_REG)) {
+      return date.range(match[1], match[2]);
+    }
+    if(match = str.match(RANGE_REG_FRONT_DURATION)) {
+      duration = match[1];
+      datetime = match[2];
+    }
+    if(match = str.match(RANGE_REG_REAR_DURATION)) {
+      datetime = match[1];
+      duration = match[2];
+    }
+    if(datetime && duration) {
+      start = date.create(datetime);
+      end = incrementDate(start, getDuration(duration));
+    }
+    return date.range(start, end);
   }
 
   function cloneRangeMember(m) {
@@ -4902,9 +4936,9 @@
     if(isNumber(amt)) {
       return amt;
     }
-    match = amt.toLowerCase().match(/^(\d+)?\s?(\w+?)s?$/i);
+    match = amt.match(DURATION_REG);
     val = parseInt(match[1]) || 1;
-    unit = match[2].slice(0,1).toUpperCase() + match[2].slice(1);
+    unit = match[2].slice(0,1).toUpperCase() + match[2].slice(1).toLowerCase();
     if(unit.match(/hour|minute|second/i)) {
       unit += 's';
     } else if(unit === 'Year') {
@@ -5171,20 +5205,32 @@
    *   Date.range('today', 'tomorrow')
    *
    ***/
-  [number, string, date].forEach(function(klass) {
-     extend(klass, false, true, {
 
-      'range': function(start, end) {
-        if(klass.create) {
-          start = klass.create(start);
-          end   = klass.create(end);
-        }
-        return new Range(start, end);
-      }
+   function extendRangeConstructor(klass, constructor) {
+     extend(klass, false, true, { 'range': constructor });
+   }
 
-    });
+   var PrimitiveRangeConstructor = function(start, end) {
+     return new Range(start, end);
+   };
 
-  });
+   var DateRangeConstructor = function(start, end) {
+     if(date.create) {
+       if(arguments.length === 1 && isString(start)) {
+         return createRangeFromString(start);
+       }
+       start = date.create(start);
+       end   = date.create(end);
+     } else {
+       start = getSimpleDate(start);
+       end   = getSimpleDate(end);
+     }
+     return new Range(start, end);
+   };
+
+   extendRangeConstructor(number, PrimitiveRangeConstructor);
+   extendRangeConstructor(string, PrimitiveRangeConstructor);
+   extendRangeConstructor(date, DateRangeConstructor);
 
   /***
    * Number module
@@ -6000,11 +6046,11 @@
     return !obj && obj !== false && obj !== 0 ? '' : encodeURIComponent(obj).replace(/%20/g, '+');
   }
 
-  function matchKey(key, match) {
+  function matchInObject(match, key, value) {
     if(isRegExp(match)) {
       return match.test(key);
     } else if(isObjectType(match)) {
-      return hasOwnProperty(match, key);
+      return match[key] === value;
     } else {
       return key === string(match);
     }
@@ -6015,7 +6061,7 @@
     iterateOverObject(obj, function(key, value) {
       match = false;
       flattenedArgs(args, function(arg) {
-        if(matchKey(key, arg)) {
+        if(matchInObject(arg, key, value)) {
           match = true;
         }
       }, 1);
@@ -6189,38 +6235,39 @@
      *
      ***/
     'merge': function(target, source, deep, resolve) {
-      var key, val, goDeep;
+      var key, sourceIsObject, targetIsObject, sourceVal, targetVal, conflict, result;
       // Strings cannot be reliably merged thanks to
       // their properties not being enumerable in < IE8.
       if(target && typeof source !== 'string') {
         for(key in source) {
           if(!hasOwnProperty(source, key) || !target) continue;
-          val    = source[key];
-          goDeep = deep && isObjectType(val);
-          // Conflict!
-          if(isDefined(target[key])) {
-            // Do not merge.
-            if(resolve === false && !goDeep) {
-              continue;
-            }
-            // Use the result of the callback as the result.
+          sourceVal      = source[key];
+          targetVal      = target[key];
+          conflict       = isDefined(targetVal);
+          sourceIsObject = isObjectType(sourceVal);
+          targetIsObject = isObjectType(targetVal);
+          result         = conflict && resolve === false ? targetVal : sourceVal;
+
+          if(conflict) {
             if(isFunction(resolve)) {
-              val = resolve.call(source, key, target[key], source[key])
+              // Use the result of the callback as the result.
+              result = resolve.call(source, key, targetVal, sourceVal)
             }
           }
-          // Deep merging.
-          if(goDeep) {
-            if(isDate(val)) {
-              val = new date(val.getTime());
-            } else if(isRegExp(val)) {
-              val = new regexp(val.source, getRegExpFlags(val));
+
+          // Going deep
+          if(deep && (sourceIsObject || targetIsObject)) {
+            if(isDate(sourceVal)) {
+              result = new date(sourceVal.getTime());
+            } else if(isRegExp(sourceVal)) {
+              result = new regexp(sourceVal.source, getRegExpFlags(sourceVal));
             } else {
-              if(!target[key]) target[key] = array.isArray(val) ? [] : {};
-              object.merge(target[key], source[key], deep, resolve);
+              if(!targetIsObject) target[key] = array.isArray(sourceVal) ? [] : {};
+              object.merge(target[key], sourceVal, deep, resolve);
               continue;
             }
           }
-          target[key] = val;
+          target[key] = result;
         }
       }
       return target;
@@ -9124,7 +9171,7 @@ Date.addLocale('sv', {
 Date.addLocale('zh-CN', {
   'variant': true,
   'monthSuffix': '月',
-  'weekdays': '星期日|周日,星期一|周一,星期二|周二,星期三|周三,星期四|周四,星期五|周五,星期六|周六',
+  'weekdays': '星期日|周日|星期天,星期一|周一,星期二|周二,星期三|周三,星期四|周四,星期五|周五,星期六|周六',
   'units': '毫秒,秒钟,分钟,小时,天,个星期|周,个月,年',
   'tokens': '日|号',
   'short':'{yyyy}年{M}月{d}日',
@@ -9136,11 +9183,13 @@ Date.addLocale('zh-CN', {
   'timeSuffixes': '点|时,分钟?,秒',
   'ampm': '上午,下午',
   'modifiers': [
+    { 'name': 'day', 'src': '大前天', 'value': -3 },
     { 'name': 'day', 'src': '前天', 'value': -2 },
     { 'name': 'day', 'src': '昨天', 'value': -1 },
     { 'name': 'day', 'src': '今天', 'value': 0 },
     { 'name': 'day', 'src': '明天', 'value': 1 },
     { 'name': 'day', 'src': '后天', 'value': 2 },
+    { 'name': 'day', 'src': '大后天', 'value': 3 },
     { 'name': 'sign', 'src': '前', 'value': -1 },
     { 'name': 'sign', 'src': '后', 'value':  1 },
     { 'name': 'shift', 'src': '上|去', 'value': -1 },
@@ -9205,7 +9254,7 @@ Date.addLocale('zh-CN', {
 
 Date.addLocale('zh-TW', {
   'monthSuffix': '月',
-  'weekdays': '星期日|週日,星期一|週一,星期二|週二,星期三|週三,星期四|週四,星期五|週五,星期六|週六',
+  'weekdays': '星期日|週日|星期天,星期一|週一,星期二|週二,星期三|週三,星期四|週四,星期五|週五,星期六|週六',
   'units': '毫秒,秒鐘,分鐘,小時,天,個星期|週,個月,年',
   'tokens': '日|號',
   'short':'{yyyy}年{M}月{d}日',
@@ -9217,11 +9266,13 @@ Date.addLocale('zh-TW', {
   'timeSuffixes': '點|時,分鐘?,秒',
   'ampm': '上午,下午',
   'modifiers': [
+    { 'name': 'day', 'src': '大前天', 'value': -3 },
     { 'name': 'day', 'src': '前天', 'value': -2 },
     { 'name': 'day', 'src': '昨天', 'value': -1 },
     { 'name': 'day', 'src': '今天', 'value': 0 },
     { 'name': 'day', 'src': '明天', 'value': 1 },
     { 'name': 'day', 'src': '後天', 'value': 2 },
+    { 'name': 'day', 'src': '大後天', 'value': 3 },
     { 'name': 'sign', 'src': '前', 'value': -1 },
     { 'name': 'sign', 'src': '後', 'value': 1 },
     { 'name': 'shift', 'src': '上|去', 'value': -1 },
@@ -9241,4 +9292,4 @@ Date.addLocale('zh-TW', {
 });
 
 
-})();
+}).call(this);
