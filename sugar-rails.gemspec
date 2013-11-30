@@ -17,6 +17,7 @@ Gem::Specification.new do |gem|
 
   gem.add_dependency "railties", ">= 3.0.0"
   gem.add_development_dependency "bundler", ">= 1.1.0"
+  gem.add_development_dependency "rake", "~> 0.9.2.2"
 
   gem.add_development_dependency "rails", "~> 4.0.1"
   gem.add_development_dependency "minitest-rails-capybara", "~> 0.10.0"
